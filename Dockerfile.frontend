@@ -5,6 +5,8 @@ COPY frontend/package*.json frontend/tsconfig.json frontend/vite.config.ts ./
 RUN npm install
 COPY frontend/src ./src
 COPY frontend/public ./public
+# Copy Vite entry HTML (must be at project root in build context)
+COPY frontend/index.html ./index.html
 RUN npm run build
 
 FROM docker.pumpking.life/nginx:alpine AS runtime
