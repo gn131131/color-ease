@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { usePaletteStore } from "../lib/store";
+import { usePaletteStore } from "../lib";
 export const PaletteGenerator = ({ palette }) => {
     const { palette: storePalette } = usePaletteStore();
     const current = palette || storePalette;

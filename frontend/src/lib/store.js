@@ -12,11 +12,7 @@ export const PaletteProvider = ({ children }) => {
         }
     });
     const save = (p) => {
-        setSaved((s) => {
-            const next = [...s, p];
-            localStorage.setItem("palettes", JSON.stringify(next));
-            return next;
-        });
+        setSaved(s => { const next = [...s, p]; localStorage.setItem("palettes", JSON.stringify(next)); return next; });
     };
     return _jsx(Ctx.Provider, { value: { palette, setPalette, saved, save }, children: children });
 };

@@ -23,7 +23,6 @@ services:
         ports:
             - "${FRONTEND_PORT:-18080}:80"
         restart: unless-stopped
-
 # 使用方法:
 # 1) 登录私有仓库: docker login docker.pumpking.life
 # 2) 拉取镜像(可选): docker compose pull

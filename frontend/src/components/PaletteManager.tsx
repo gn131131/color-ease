@@ -1,13 +1,17 @@
 import React from "react";
 import { usePaletteStore, PaletteData, PaletteColor } from "../lib";
 
-interface Props { palette: PaletteData | null }
+interface Props {
+    palette: PaletteData | null;
+}
 export const PaletteManager: React.FC<Props> = ({ palette }) => {
     const { saved, save } = usePaletteStore();
     return (
         <div>
             <h3>Palettes</h3>
-            <button className="copy" disabled={!palette} onClick={() => palette && save(palette)}>Save current</button>
+            <button className="copy" disabled={!palette} onClick={() => palette && save(palette)}>
+                Save current
+            </button>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                 {saved.map((p: PaletteData, i: number) => (
                     <div key={i} style={{ border: "1px solid #333", padding: 4, borderRadius: 6, fontSize: 11 }}>
