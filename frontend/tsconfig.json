@@ -13,7 +13,9 @@
         "moduleResolution": "Node",
         "resolveJsonModule": true,
         "isolatedModules": true,
-        "noEmit": false,
+        // Avoid emitting JS into src (Vite handles transpile); keeps repo clean
+        "noEmit": true,
+        "allowImportingTsExtensions": true,
         "jsx": "react-jsx"
     },
     "include": ["src"],
