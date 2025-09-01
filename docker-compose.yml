@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+    backend:
+        build:
+            context: .
+            dockerfile: Dockerfile.backend
+        container_name: color-ease-backend
+        environment:
+            PORT: 3001
+            NODE_ENV: production
+        ports:
+            - "3001:3001"
+    frontend:
+        build:
+            context: .
+            dockerfile: Dockerfile.frontend
+        container_name: color-ease-frontend
+        depends_on:
+            - backend
+        environment: {}
+        ports:
+            - "18080:80"
