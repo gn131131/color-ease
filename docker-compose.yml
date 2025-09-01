@@ -11,7 +11,7 @@ services:
             - "${BACKEND_PORT:-33011}:3001"
         restart: unless-stopped
         healthcheck:
-            test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3001/health"]
+            test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:33011/health"]
             interval: 30s
             timeout: 5s
             retries: 3
