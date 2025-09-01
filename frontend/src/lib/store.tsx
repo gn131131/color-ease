@@ -1,41 +1,25 @@
 import React, { PropsWithChildren } from "react";
 
-export interface PaletteColor {
-    hex: string;
-    hsl: { h: number; s: number; l: number };
-}
-export interface PaletteData {
-    scheme: string;
-    colors: PaletteColor[];
-}
-export interface GeneratedPalette extends PaletteData {}
+// Internal interfaces (not directly exported to avoid TS edge-case where 'locally declared' warning appears)
+interface PaletteColorDef { hex: string; hsl: { h: number; s: number; l: number }; }
+interface PaletteDataDef { scheme: string; colors: PaletteColorDef[]; }
+interface StoreState { palette: PaletteDataDef | null; setPalette: (p: PaletteDataDef) => void; saved: PaletteDataDef[]; save: (p: PaletteDataDef) => void; }
 
-export type { PaletteColor as TPaletteColor, PaletteData as TPaletteData };
-interface StoreState {
-    palette: PaletteData | null;
-    setPalette: (p: PaletteData) => void;
-    saved: PaletteData[];
-    save: (p: PaletteData) => void;
-}
+// Public exported aliases (these ARE the types consumers import)
+export type PaletteColor = PaletteColorDef;
+export type PaletteData = PaletteDataDef;
+export type GeneratedPalette = PaletteDataDef;
 
 const Ctx = React.createContext<StoreState | null>(null);
 
 export const PaletteProvider: React.FC<PropsWithChildren> = ({ children }) => {
-    const [palette, setPalette] = React.useState<PaletteData | null>(null);
-    const [saved, setSaved] = React.useState<PaletteData[]>(() => {
-        try {
-            return JSON.parse(localStorage.getItem("palettes") || "[]");
-        } catch {
-            return [];
-        }
+    const [palette, setPalette] = React.useState<PaletteDataDef | null>(null);
+    const [saved, setSaved] = React.useState<PaletteDataDef[]>(() => {
+        try { return JSON.parse(localStorage.getItem("palettes") || "[]"); } catch { return []; }
     });
 
-    const save = (p: PaletteData) => {
-        setSaved((s) => {
-            const next = [...s, p];
-            localStorage.setItem("palettes", JSON.stringify(next));
-            return next;
-        });
+    const save = (p: PaletteDataDef) => {
+        setSaved(s => { const next = [...s, p]; localStorage.setItem("palettes", JSON.stringify(next)); return next; });
     };
 
     return <Ctx.Provider value={{ palette, setPalette, saved, save }}>{children}</Ctx.Provider>;

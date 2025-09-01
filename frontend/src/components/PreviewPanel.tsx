@@ -1,5 +1,5 @@
 import React from "react";
-import { PaletteData, PaletteColor } from "../lib/store";
+import { PaletteData, PaletteColor } from "../lib";
 
 interface Props {
     palette: PaletteData | null;
