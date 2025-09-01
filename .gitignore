@@ -1,5 +1,7 @@
 node_modules
-.dist
 backend/dist
 frontend/dist
 .env
+# Ignore stray compiled JS copies inside src (keep config files if any)
+frontend/src/**/*.js
+!frontend/src/**/*config.js
