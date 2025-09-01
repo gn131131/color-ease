@@ -1,22 +1,33 @@
 version: "3.9"
 services:
     backend:
-        build:
-            context: .
-            dockerfile: Dockerfile.backend
+        image: docker.pumpking.life/color-ease-backend:${TAG:-latest}
         container_name: color-ease-backend
         environment:
             PORT: 3001
             NODE_ENV: production
         ports:
             - "3001:3001"
+        restart: unless-stopped
+        healthcheck:
+            test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3001/health"]
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
     frontend:
-        build:
-            context: .
-            dockerfile: Dockerfile.frontend
+        image: docker.pumpking.life/color-ease-frontend:${TAG:-latest}
         container_name: color-ease-frontend
         depends_on:
             - backend
-        environment: {}
         ports:
-            - "18080:80"
+            - "${FRONTEND_PORT:-18080}:80"
+        restart: unless-stopped
+
+# 使用方法:
+# 1) 登录私有仓库: docker login docker.pumpking.life
+# 2) 拉取镜像(可选): docker compose pull
+# 3) 启动: TAG=latest docker compose up -d
+# 4) 访问: http://<服务器IP>:18080
+# 覆盖端口: FRONTEND_PORT=30080 docker compose up -d
+# 指定特定镜像标签: TAG=sha-xxxx docker compose up -d

@@ -36,11 +36,23 @@ npm run dev
 浏览器访问 http://localhost:5173
 Vite 已通过 `server.proxy` 把 /api 与 /health 代理到 3001。
 
-## Docker 本地组合
+## Docker 部署 (使用已构建镜像)
+拉取并运行（默认 latest，可用 TAG 指定）:
 ```
-docker compose up --build -d
+docker login docker.pumpking.life
+docker compose pull
+TAG=latest docker compose up -d
 ```
-访问 http://localhost:18080 （Nginx 已将 /api/* 反向代理到 backend）。
+访问: http://<服务器IP>:18080
+
+自定义:
+```
+# 指定特定 tag (例如 CI 生成的 sha 或分支)
+TAG=sha-xxxx docker compose up -d
+
+# 改前端对外端口
+FRONTEND_PORT=30080 docker compose up -d
+```
 
 ## GitHub Action 镜像
 推送到 main 触发构建：
