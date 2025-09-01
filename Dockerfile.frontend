@@ -1,5 +1,5 @@
 # Frontend Dockerfile
-FROM docker.pumpking.life/node:20-alpine AS build
+FROM docker.pumpking.life/node:18-alpine AS build
 WORKDIR /app
 COPY frontend/package*.json frontend/tsconfig.json frontend/vite.config.ts ./
 RUN npm install
