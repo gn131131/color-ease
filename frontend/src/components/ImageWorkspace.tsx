@@ -469,10 +469,24 @@ export const ImageWorkspace: React.FC = () => {
             if (measure.start) {
                 const pos = toImageCoord(e.clientX, e.clientY);
                 if (pos) {
-                    const end = { x: Math.floor(pos.x), y: Math.floor(pos.y) };
-                    const dx = end.x - measure.start.x;
-                    const dy = end.y - measure.start.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    let ex = Math.floor(pos.x);
+                    let ey = Math.floor(pos.y);
+                    // 支持按住 Shift 时水平/垂直吸附
+                    if (e.shiftKey) {
+                        const dx = ex - measure.start.x;
+                        const dy = ey - measure.start.y;
+                        if (Math.abs(dx) >= Math.abs(dy)) {
+                            // 水平吸附，锁定 y
+                            ey = measure.start.y;
+                        } else {
+                            // 垂直吸附，锁定 x
+                            ex = measure.start.x;
+                        }
+                    }
+                    const end = { x: ex, y: ey };
+                    const dx2 = end.x - measure.start.x;
+                    const dy2 = end.y - measure.start.y;
+                    const dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
                     setMeasure((m) => ({ ...m, end, distance: dist }));
                     draw();
                 }
@@ -506,43 +520,63 @@ export const ImageWorkspace: React.FC = () => {
         e.target.value = "";
     };
 
-    const resetView = () => {
-        if (activeImage) {
-            const s = computeMinScale(activeImage.width, activeImage.height);
-            setScale(s);
-            setMinScale(s);
-            viewState.current.x = 0;
-            viewState.current.y = 0;
-            draw();
+    const removeImage = (id: string) => {
+        setImages((prev) => {
+            const next = prev.filter((p) => p.id !== id);
+            return next;
+        });
+        if (activeId === id) {
+            setActiveId((cur) => {
+                const remaining = images.filter((i) => i.id !== id);
+                return remaining.length > 0 ? remaining[0].id : null;
+            });
         }
     };
+
+    // resetView 功能已移除（UI 中不再展示重置视图按钮）
 
     return (
         <div className="workspace-wrapper">
             <div className="left-bar">
-                <div className="section">
-                    <label className="upload-btn">
-                        选择文件
+                <div className="thumb-plus">
+                    <label className="thumb-upload">
+                        <div className="plus">+</div>
                         <input type="file" multiple accept="image/*" onChange={handleFileInput} />
                     </label>
-                    <p className="tip">或直接拖拽图片到右侧区域</p>
                 </div>
-                <div className="section">
-                    <h3>图片列表</h3>
+                <div className="thumb-list">
                     {images.length === 0 && <div className="empty">暂无图片</div>}
-                    <ul className="image-list">
-                        {images.map((img) => (
-                            <li key={img.id} className={img.id === activeId ? "active" : ""} onClick={() => setActiveId(img.id)}>
-                                <span>{img.name}</span>
-                                <small>
-                                    {img.width}×{img.height}
-                                </small>
-                            </li>
-                        ))}
-                    </ul>
+                    {images.map((img) => (
+                        <div key={img.id} className={`thumb-wrapper ${img.id === activeId ? "active" : "inactive"}`}>
+                            <button className={`thumb-item ${img.id === activeId ? "active" : ""}`} onClick={() => setActiveId(img.id)} title={`${img.name} ${img.width}×${img.height}`}>
+                                <img src={img.url} alt={img.name} />
+                            </button>
+                            <button
+                                className="thumb-del"
+                                onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    removeImage(img.id);
+                                }}
+                                aria-label="删除图片"
+                                title="删除"
+                            >
+                                ×
+                            </button>
+                        </div>
+                    ))}
                 </div>
+            </div>
+            <div className="canvas-area" ref={containerRef}>
+                <canvas
+                    ref={canvasRef}
+                    className={tool === "measure" ? "cursor-measure" : spacePressedRef.current ? "cursor-pan" : tabPressedRef.current ? "cursor-zoom" : "cursor-cross"}
+                    onPointerDown={handlePointerDown}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                />
+            </div>
+            <div className="right-bar">
                 <div className="section">
-                    <h3>工具 / 快捷操作</h3>
                     <div className="tools">
                         <button
                             className={tool === "measure" ? "on" : ""}
@@ -553,10 +587,9 @@ export const ImageWorkspace: React.FC = () => {
                         >
                             {tool === "measure" ? "退出测量" : "量长度"}
                         </button>
-                        <button onClick={resetView}>重置视图</button>
+                        {/* 重置视图按钮已移除 */}
                     </div>
-                    <div className="info-line">交互：滚轮=缩放 | 按住Space=拖拽 | 默认单击=取色 | 量长度=切换测量</div>
-                    <div className="info-line">当前缩放：{(scale / minScale).toFixed(2)}x （最小=短边填满）</div>
+                    {/* 当前缩放展示已移除 */}
                     <div className="info-line">取色结果：{color}</div>
                     {measure.distance && measure.start && measure.end && (
                         <div className="info-line">
@@ -565,16 +598,6 @@ export const ImageWorkspace: React.FC = () => {
                     )}
                     <div className="info-line status">{status}</div>
                 </div>
-            </div>
-            <div className="canvas-area" ref={containerRef}>
-                {!activeImage && <div className="placeholder">拖拽或选择图片以开始</div>}
-                <canvas
-                    ref={canvasRef}
-                    className={tool === "measure" ? "cursor-measure" : spacePressedRef.current ? "cursor-pan" : tabPressedRef.current ? "cursor-zoom" : "cursor-cross"}
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                />
             </div>
         </div>
     );
