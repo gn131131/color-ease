@@ -47,6 +47,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const snappingRef = useRef<{ active: boolean; axis: "h" | "v" | null; x?: number; y?: number }>({ active: false, axis: null });
     const [infoPanelPosition, setInfoPanelPosition] = useState<"top" | "bottom">("top");
     const [isDragging, setIsDragging] = useState(false);
+    const hoverPixelRef = useRef<{ x: number; y: number } | null>(null);
 
     const activeImage = images.find((i) => i.id === activeId) || null;
 
@@ -64,7 +65,8 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
 <path d="M128.727957 949.33649a12.245295 8.810639 44.98 1 0 12.455776-12.464474 12.245295 8.810639 44.98 1 0-12.455776 12.464474Z" fill="#F6FAFD"/>
 <path d="M128.0012 853.333867c-33.557228 0-63.9998 72.938439-63.9998 101.333016A66.901124 66.901124 0 0 0 128.0012 1024a66.901124 66.901124 0 0 0 63.9998-69.333117C192.001 926.272305 161.558428 853.333867 128.0012 853.333867z m0 127.9996a24.469257 24.469257 0 0 1-21.333267-26.666584 126.164939 126.164939 0 0 1 21.333267-52.949168 126.164939 126.164939 0 0 1 21.333267 52.949168A24.469257 24.469257 0 0 1 128.0012 981.333467zM959.9986 115.821505a115.882305 115.882305 0 0 0-197.844715-81.855744l-73.237105 73.237104 30.16524 30.165239 73.237104-73.237104a73.301104 73.301104 0 0 1 103.594343 0 73.322438 73.322438 0 0 1 0 103.573009l-118.676963 118.655629-103.615676-103.551676 18.389276-18.389276-30.165239-30.165239-18.389276 18.389276-18.282609-18.239943a70.207781 70.207781 0 0 0-97.17303 0 68.607786 68.607786 0 0 0 0 96.874364l18.453276 18.453276-319.359002 319.231002a21.333267 21.333267 0 0 0-5.183984 8.341307l-31.786567 95.573035-63.530469 63.317135a68.714452 68.714452 0 0 0 97.279696 97.04503l63.21047-63.423801 95.573034-31.786568a21.4826 21.4826 0 0 0 8.362641-5.141317l35.13589-35.13589-30.165239-30.165239-31.573235 31.551901-95.615701 31.807901a21.205267 21.205267 0 0 0-8.383974 5.16265l-66.559792 66.794458a27.306581 27.306581 0 0 1-36.927884 0.277333 26.389251 26.389251 0 0 1 0-36.885218l66.986457-66.751792a21.333267 21.333267 0 0 0 5.183984-8.383974l31.8079-95.594367L365.71779 490.668333h207.188686l-139.988896 139.988896 30.16524 30.165239L710.39938 413.591241l18.431942 18.431942a68.543786 68.543786 0 0 0 96.917031 0 68.799785 68.799785 0 0 0 0-97.151696l-18.303943-18.303943 118.570296-118.548963A114.431642 114.431642 0 0 0 959.9986 115.821505zM615.594343 448.0018h-207.210019l168.063475-168.063475 103.615676 103.594343z m179.946104-46.165189a25.877252 25.877252 0 0 1-36.671885 0l-200.703373-200.724706a26.111918 26.111918 0 0 1 18.538609-44.415861 26.197251 26.197251 0 0 1 18.303943 7.807975l33.365229 33.365229 133.780915 133.759582 33.343896 33.343896a25.791919 25.791919 0 0 1 0.042666 36.863885z" fill="#095D96"/>
 </svg>`;
-    const pickerCursor = `url("data:image/svg+xml;utf8,${encodeURIComponent(pickerSvg)}") 14 14, crosshair`;
+    // hotspot at left-bottom so the droplet tip aligns with pointer
+    const pickerCursor = `url("data:image/svg+xml;utf8,${encodeURIComponent(pickerSvg)}") 0 28, crosshair`;
 
     // helpers: 计算当前画布/图片相关的对齐信息
     const computeImageMetrics = (scaleVal = scale) => {
@@ -202,6 +204,25 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             ctx.restore();
         }
 
+        // 当为取色工具时，绘制 hover 高亮框（微弱边框，便于看到目标像素）
+        // 仅在像素网格可见（达到 GRID_SHOW_SCALE）时显示 hover，保持行为与网格一致
+        if (pixelScale >= GRID_SHOW_SCALE && tool === "picker" && hoverPixelRef.current) {
+            const p = hoverPixelRef.current;
+            // 使用像素边缘进行映射
+            const toScreen = (ix: number, iy: number) => ({ sx: cx + ix * pixelScale, sy: cy + iy * pixelScale });
+            const sp = toScreen(p.x, p.y);
+            ctx.save();
+            // 轻微的白色半透明填充与细边框
+            ctx.fillStyle = "rgba(255,255,255,0.06)";
+            ctx.strokeStyle = "rgba(255,255,255,0.9)";
+            // 边框线宽根据 dpr 调整以保持细微
+            ctx.lineWidth = Math.max(1 / dpr, 0.8);
+            // 绘制填充与边框
+            ctx.fillRect(sp.sx, sp.sy, pixelScale, pixelScale);
+            ctx.strokeRect(sp.sx + 0.5 * ctx.lineWidth, sp.sy + 0.5 * ctx.lineWidth, Math.max(0, pixelScale - ctx.lineWidth), Math.max(0, pixelScale - ctx.lineWidth));
+            ctx.restore();
+        }
+
         // 吸附视觉提示：当用户按住 shift 并在测量中时，绘制锁定轴线（虚线）
         if (snappingRef.current.active && measure.start) {
             const start = measure.start;
@@ -310,8 +331,9 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 if (m.start || m.end || m.distance) {
                     // hide tip as well
                     setMeasureTip({ visible: false, x: 0, y: 0, text: "" });
-                    // ensure canvas updated
-                    requestAnimationFrame(() => draw());
+                    // ensure canvas updated (use setTimeout so state commits first)
+                    hoverPixelRef.current = null;
+                    setTimeout(() => draw(), 0);
                     return { start: null, end: null, distance: null };
                 }
                 return m;
@@ -557,6 +579,23 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const handlePointerMove: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
         // update shift state each move
         shiftPressedRef.current = e.shiftKey;
+        // update hover pixel for picker
+        if (tool === "picker") {
+            const posHover = toImageCoord(e.clientX, e.clientY);
+            if (posHover) {
+                const hx = Math.floor(posHover.x);
+                const hy = Math.floor(posHover.y);
+                // only trigger draw if changed
+                const prev = hoverPixelRef.current;
+                if (!prev || prev.x !== hx || prev.y !== hy) {
+                    hoverPixelRef.current = { x: hx, y: hy };
+                    draw();
+                }
+            } else if (hoverPixelRef.current) {
+                hoverPixelRef.current = null;
+                draw();
+            }
+        }
         if (viewState.current.dragging) {
             const dx = e.clientX - viewState.current.lastX;
             const dy = e.clientY - viewState.current.lastY;
@@ -619,11 +658,31 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             clampView();
             draw();
         }
+        // clear hover when releasing pointer in picker
+        if (tool === "picker" && hoverPixelRef.current) {
+            hoverPixelRef.current = null;
+            draw();
+        }
         // clear shift/snapping when pointer released
         shiftPressedRef.current = false;
         snappingRef.current = { active: false, axis: null };
         // 隐藏测量浮动提示（测量结束或取消）
         setMeasureTip((t) => ({ ...t, visible: false }));
+    };
+
+    const handleContextMenu: React.MouseEventHandler<HTMLCanvasElement> = (e) => {
+        // If currently in measure tool, use right-click to exit measure and suppress system menu
+        if (tool === "measure") {
+            e.preventDefault();
+            e.stopPropagation();
+            // clear measure state immediately and hide tip
+            setMeasure({ start: null, end: null, distance: null });
+            setMeasureTip({ visible: false, x: 0, y: 0, text: "" });
+            // switch back to picker (or default tool)
+            setTool("picker");
+            // ensure canvas updated
+            setTimeout(() => draw(), 0);
+        }
     };
 
     const pickColorAt = (ix: number, iy: number) => {
@@ -694,14 +753,14 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             <div className="canvas-area" ref={containerRef}>
                 <canvas
                     ref={canvasRef}
-                    style={{ cursor: tool === "picker" ? pickerCursor : spacePressedRef.current ? (isDragging ? "grabbing" : "grab") : tool === "measure" ? "crosshair" : "default" }}
+                    style={{ cursor: spacePressedRef.current ? (isDragging ? "grabbing" : "grab") : tool === "picker" ? pickerCursor : tool === "measure" ? "crosshair" : "default" }}
                     className={
-                        tool === "measure"
+                        spacePressedRef.current
+                            ? `cursor-pan ${isDragging ? "grabbing" : ""}`
+                            : tool === "measure"
                             ? "cursor-measure"
                             : tool === "picker"
                             ? "cursor-picker"
-                            : spacePressedRef.current
-                            ? `cursor-pan ${isDragging ? "grabbing" : ""}`
                             : tabPressedRef.current
                             ? "cursor-zoom"
                             : "cursor-cross"
@@ -716,6 +775,13 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         handlePointerMove(e);
                     }}
                     onPointerUp={handlePointerUp}
+                    onPointerLeave={() => {
+                        if (hoverPixelRef.current) {
+                            hoverPixelRef.current = null;
+                            draw();
+                        }
+                    }}
+                    onContextMenu={handleContextMenu}
                 />
 
                 <div className={`info-panel ${infoPanelPosition}`} onMouseEnter={() => setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"))}>

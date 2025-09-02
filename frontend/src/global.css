@@ -80,17 +80,17 @@ a {
 }
 
 .cursor-picker {
-    /* 改进的吸管光标：带有圆形取样指示和暗色描边，热点在圆中心 */
+    /* 改进的吸管光标：带有圆形取样指示和暗色描边，热点在左下角以对齐吸管头部 */
     /* Photoshop-like eyedropper SVG: 更接近真实滴管形状 */
     cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><g fill="none" stroke="black" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5c0 1.5-1 3-3 5l-7 7c-1 1-2.5 1-3.5 0-1-1-1-2.5 0-3.5l7-7c2-2 3.5-3 5-3z" fill="#ffffff"/><path d="M3 21l4-1 1 4-4 1-1-4z" transform="translate(3 -2) rotate(-20 8 18)" fill="#dcdcdc"/><circle cx="10" cy="9" r="2" fill="#0b1220" stroke="#fff" stroke-width="0.6"/></g></svg>')
-            12 12,
+            0 32,
         crosshair;
 }
 
 /* Photoshop-like 将吸管缩小版本用于更清晰的指针 (fallback) */
 .cursor-picker-small {
     cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><g fill="none" stroke="black" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4c0 1-1 2-2 3l-5 5c-1 1-2 1-3 0-1-1-1-2 0-3l5-5c1-1 2-2 3-2z" fill="#fff"/><circle cx="8" cy="7" r="1.5" fill="#0b1220" stroke="#fff" stroke-width="0.5"/></g></svg>')
-            10 10,
+            0 20,
         crosshair;
 }
 
