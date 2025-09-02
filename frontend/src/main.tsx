@@ -1,12 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./modules/App";
-// Import from barrel to avoid TS picking a removed shadow .ts file
-import { PaletteProvider } from "./lib";
+// 显式引用 TSX 版本避免选择已删除的旧 JS 入口
+import { App } from "./modules/App.tsx";
 import "./global.css";
 
-createRoot(document.getElementById("root")!).render(
-    <PaletteProvider>
-        <App />
-    </PaletteProvider>
-);
+createRoot(document.getElementById("root")!).render(<App />);
