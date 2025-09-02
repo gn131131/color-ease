@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useToast } from "../lib/toast";
 
 interface LoadedImage {
     id: string;
@@ -14,7 +15,13 @@ type Tool = "picker" | "measure"; // 去掉 pan 按钮，使用 Space 拖拽
 // 阈值：当缩放倍数超过该值时显示像素网格
 const GRID_SHOW_SCALE = 8;
 
-export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }> = ({ tool, setTool }) => {
+export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; color: string; setColor: (c: string) => void; colorMode: "hex" | "rgb" }> = ({
+    tool,
+    setTool,
+    color,
+    setColor,
+    colorMode
+}) => {
     const [images, setImages] = useState<LoadedImage[]>([]);
     const [activeId, setActiveId] = useState<string | null>(null);
     const [scale, setScale] = useState(1);
@@ -22,9 +29,11 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
     const spacePressedRef = useRef(false);
     const tabPressedRef = useRef(false);
     const [, forceKeyState] = useState(0);
-    const [color, setColor] = useState<string>("无");
+    // color is received from props
     const [measure, setMeasure] = useState<{ start: { x: number; y: number } | null; end: { x: number; y: number } | null; distance: number | null }>({ start: null, end: null, distance: null });
     const [status, setStatus] = useState<string>("");
+    const [measureTip, setMeasureTip] = useState<{ visible: boolean; x: number; y: number; text: string }>({ visible: false, x: 0, y: 0, text: "" });
+    const toast = useToast();
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -37,6 +46,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
     const shiftPressedRef = useRef(false);
     const snappingRef = useRef<{ active: boolean; axis: "h" | "v" | null; x?: number; y?: number }>({ active: false, axis: null });
     const [infoPanelPosition, setInfoPanelPosition] = useState<"top" | "bottom">("top");
+    const [isDragging, setIsDragging] = useState(false);
 
     const activeImage = images.find((i) => i.id === activeId) || null;
 
@@ -159,21 +169,20 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
 
         // 测量线（使用对齐后的 pixelScale）
         if (measure.start && measure.end) {
+            // 使用像素边缘进行绘制：像素索引 i 的左/上边缘位于 i * pixelScale
             const toScreen = (ix: number, iy: number) => ({ sx: cx + ix * pixelScale, sy: cy + iy * pixelScale });
             const s1 = toScreen(measure.start.x, measure.start.y);
             const s2 = toScreen(measure.end.x, measure.end.y);
             ctx.save();
-            ctx.strokeStyle = "#ffeb3b";
-            ctx.fillStyle = "#ffeb3b";
+            // 使用红色作为测量线颜色
+            ctx.strokeStyle = "#ff4d4f";
+            ctx.fillStyle = "#ff4d4f";
             ctx.lineWidth = Math.max(1 / dpr, 1);
             ctx.beginPath();
             ctx.moveTo(s1.sx, s1.sy);
             ctx.lineTo(s2.sx, s2.sy);
             ctx.stroke();
-            if (measure.distance) {
-                ctx.font = "12px sans-serif";
-                ctx.fillText(measure.distance.toFixed(1) + "px", (s1.sx + s2.sx) / 2 + 4, (s1.sy + s2.sy) / 2 + 4);
-            }
+            // 距离展示已迁移为随鼠标浮动提示，不在画布上绘制文本
             ctx.restore();
         }
 
@@ -182,16 +191,20 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
             const start = measure.start;
             const axis = snappingRef.current.axis;
             ctx.save();
-            ctx.strokeStyle = "rgba(255,200,60,0.85)";
+            // 吸附视觉提示使用与测量线相近的红色半透明色
+            ctx.strokeStyle = "rgba(255,77,79,0.85)";
             ctx.setLineDash([6, 6]);
             ctx.lineWidth = Math.max(1 / dpr, 1);
             if (axis === "h") {
+                // 使用像素边缘的 y（上边缘），即 start.y * pixelScale
                 const y = cy + start.y * pixelScale;
                 ctx.beginPath();
                 ctx.moveTo(0, y);
                 ctx.lineTo(box.width, y);
                 ctx.stroke();
             } else if (axis === "v") {
+                // 使用像素中心的 x
+                // 使用像素边缘的 x（左边缘）
                 const x = cx + start.x * pixelScale;
                 ctx.beginPath();
                 ctx.moveTo(x, 0);
@@ -273,7 +286,35 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
         draw();
     }, [draw]);
 
+    // 当切换工具：如果离开量测工具，清空画板上的测量线与提示
+    useEffect(() => {
+        if (tool !== "measure") {
+            // 如果存在测量数据，则清除并重绘
+            setMeasure((m) => {
+                if (m.start || m.end || m.distance) {
+                    // hide tip as well
+                    setMeasureTip({ visible: false, x: 0, y: 0, text: "" });
+                    // ensure canvas updated
+                    requestAnimationFrame(() => draw());
+                    return { start: null, end: null, distance: null };
+                }
+                return m;
+            });
+        }
+    }, [tool, draw]);
+
     // 鼠标事件
+    const formatColor = (hex: string) => {
+        if (!hex) return "";
+        if (colorMode === "hex") return hex.toUpperCase();
+        const h = hex.replace(/^#/, "");
+        if (h.length !== 6) return hex;
+        const r = parseInt(h.slice(0, 2), 16);
+        const g = parseInt(h.slice(2, 4), 16);
+        const b = parseInt(h.slice(4, 6), 16);
+        return `rgb(${r}, ${g}, ${b})`;
+    };
+
     const toImageCoord = (clientX: number, clientY: number) => {
         const metrics = computeImageMetrics();
         if (!metrics || !activeImage) return null;
@@ -402,7 +443,6 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
             scaleRef.current = newScale;
             // use functional update to avoid races，并在更新后再次确保 view 在新 scale 下被约束
             setScale(() => newScale);
-            setStatus(`缩放: ${(newScale / minScale).toFixed(2)}x (滚轮)`);
             // 使用 requestAnimationFrame 画面更新
             requestAnimationFrame(() => {
                 // 已使用 clampViewFor，但也执行一次全量 clamp 以防其它逻辑修改
@@ -461,17 +501,40 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
         shiftPressedRef.current = e.shiftKey;
         if (spacePressedRef.current) {
             viewState.current.dragging = true;
+            setIsDragging(true);
             viewState.current.lastX = e.clientX;
             viewState.current.lastY = e.clientY;
         } else if (tool === "picker") {
             const pos = toImageCoord(e.clientX, e.clientY);
-            if (pos) pickColorAt(pos.x, pos.y);
+            if (pos) {
+                const hex = pickColorAt(pos.x, pos.y);
+                // 单击画布时复制当前颜色（以 colorMode 格式）
+                if (hex) {
+                    const text = formatColor(hex);
+                    // 尝试写入剪贴板并根据结果显示全局提示
+                    try {
+                        navigator.clipboard
+                            .writeText(text)
+                            .then(() => {
+                                toast.show("已复制");
+                            })
+                            .catch(() => {
+                                toast.show("复制失败");
+                            });
+                    } catch (err) {
+                        toast.show("复制失败");
+                    }
+                }
+            }
         } else if (tool === "measure") {
             const pos = toImageCoord(e.clientX, e.clientY);
             if (pos) {
+                // 使用所在像素索引（向下取整），确保点击落在的像素被选中
                 setMeasure({ start: { x: Math.floor(pos.x), y: Math.floor(pos.y) }, end: null, distance: null });
                 // reset snapping
                 snappingRef.current = { active: !!e.shiftKey, axis: null };
+                // 初始化 measureTip：隐藏直到移动产生距离
+                setMeasureTip({ visible: false, x: e.clientX, y: e.clientY, text: "" });
             }
         }
     };
@@ -501,6 +564,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
             if (measure.start) {
                 const pos = toImageCoord(e.clientX, e.clientY);
                 if (pos) {
+                    // 使用所在像素索引（向下取整），确保鼠标落在的像素被选中
                     let ex = Math.floor(pos.x);
                     let ey = Math.floor(pos.y);
                     // 支持按住 Shift 时水平/垂直吸附
@@ -522,8 +586,11 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
                     const end = { x: ex, y: ey };
                     const dx2 = end.x - measure.start.x;
                     const dy2 = end.y - measure.start.y;
+                    // 距离以像素中心为单位，索引差即为中心距离
                     const dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
                     setMeasure((m) => ({ ...m, end, distance: dist }));
+                    // 更新随鼠标浮动的测量提示（client 坐标），显示为像素长度
+                    setMeasureTip({ visible: true, x: e.clientX, y: e.clientY, text: `${dist.toFixed(1)} px` });
                     draw();
                 }
             }
@@ -532,12 +599,15 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
     const handlePointerUp: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
         if (viewState.current.dragging) {
             viewState.current.dragging = false;
+            setIsDragging(false);
             clampView();
             draw();
         }
         // clear shift/snapping when pointer released
         shiftPressedRef.current = false;
         snappingRef.current = { active: false, axis: null };
+        // 隐藏测量浮动提示（测量结束或取消）
+        setMeasureTip((t) => ({ ...t, visible: false }));
     };
 
     const pickColorAt = (ix: number, iy: number) => {
@@ -550,8 +620,9 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
         octx.drawImage(activeImage.img, 0, 0);
         const data = octx.getImageData(Math.floor(ix), Math.floor(iy), 1, 1).data;
         const hex = "#" + [data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
-        setColor(hex.toUpperCase());
-        setStatus(`取色: ${hex.toUpperCase()}`);
+        const hexU = hex.toUpperCase();
+        setColor(hexU);
+        return hexU;
     };
 
     const handleFileInput: React.ChangeEventHandler<HTMLInputElement> = (e) => {
@@ -584,7 +655,6 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
                     </label>
                 </div>
                 <div className="thumb-list">
-                    {images.length === 0 && <div className="empty">暂无图片</div>}
                     {images.map((img) => (
                         <div key={img.id} className={`thumb-wrapper ${img.id === activeId ? "active" : "inactive"}`}>
                             <button className={`thumb-item ${img.id === activeId ? "active" : ""}`} onClick={() => setActiveId(img.id)} title={`${img.name} ${img.width}×${img.height}`}>
@@ -608,19 +678,42 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }
             <div className="canvas-area" ref={containerRef}>
                 <canvas
                     ref={canvasRef}
-                    className={tool === "measure" ? "cursor-measure" : spacePressedRef.current ? "cursor-pan" : tabPressedRef.current ? "cursor-zoom" : "cursor-cross"}
+                    className={
+                        tool === "measure"
+                            ? "cursor-measure"
+                            : tool === "picker"
+                            ? "cursor-picker"
+                            : spacePressedRef.current
+                            ? `cursor-pan ${isDragging ? "grabbing" : ""}`
+                            : tabPressedRef.current
+                            ? "cursor-zoom"
+                            : "cursor-cross"
+                    }
                     onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
+                    onPointerMove={(e) => {
+                        // when in picker mode, pick on move
+                        if (tool === "picker") {
+                            const pos = toImageCoord(e.clientX, e.clientY);
+                            if (pos) pickColorAt(pos.x, pos.y);
+                        }
+                        handlePointerMove(e);
+                    }}
                     onPointerUp={handlePointerUp}
                 />
 
                 <div className={`info-panel ${infoPanelPosition}`} onMouseEnter={() => setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"))}>
                     <div className="info-content">
-                        <div className="info-line small">取色：{color}</div>
-                        {measure.distance && measure.start && measure.end && <div className="info-line small">{measure.distance.toFixed(1)} px</div>}
+                        <div className="info-line small">取色：{formatColor(color)}</div>
+                        {/* 测距的数值改为随鼠标浮动提示，不在信息面板展示 */}
                         <div className="info-line small measure-hint">{status}</div>
+                        {/* 可单击的色块也可以放到 info-panel，如果需要，我可以在这里添加 */}
                     </div>
                 </div>
+                {/* 测量随鼠标浮动提示框 */}
+                <div className="measure-tip" style={{ display: measureTip.visible ? "block" : "none", left: measureTip.x + 12, top: measureTip.y + 12 }} aria-hidden={!measureTip.visible}>
+                    {measureTip.text}
+                </div>
+                {/* 复制提示已改为全局 Toast 管理 */}
             </div>
         </div>
     );

@@ -38,16 +38,117 @@ a {
 .app-header .header-actions button {
     padding: 6px 10px;
     border-radius: 8px;
-    background: linear-gradient(180deg, #11161a, #0f1418);
-    border: 1px solid #222b34;
+    /* 与顶栏背景区分：稍浅的卡片式背景，便于识别为操作级按钮 */
+    background: linear-gradient(180deg, #20262b, #15181b);
+    border: 1px solid #29323a;
     color: #e6eefc;
     font-size: 13px;
     cursor: pointer;
+}
+.app-header .header-actions button:hover {
+    /* 非 translate 的 hover：加亮背景与边框，无位移 */
+    background: linear-gradient(180deg, #24303a, #1a2329);
+    border-color: #334350;
+    box-shadow: 0 8px 20px rgba(16, 28, 40, 0.45);
 }
 .app-header .header-actions button.on {
     background: linear-gradient(180deg, #305bff, #1c4bd6);
     color: white;
     border-color: rgba(80, 120, 255, 0.6);
+}
+.app-header .header-actions .swatch-btn {
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: linear-gradient(180deg, #20262b, #15181b);
+    border: 1px solid #29323a;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.app-header .header-actions .swatch-btn .swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.cursor-picker {
+    /* 改进的吸管光标：带有圆形取样指示和暗色描边，热点在圆中心 */
+    /* Photoshop-like eyedropper SVG: 更接近真实滴管形状 */
+    cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><g fill="none" stroke="black" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 5c0 1.5-1 3-3 5l-7 7c-1 1-2.5 1-3.5 0-1-1-1-2.5 0-3.5l7-7c2-2 3.5-3 5-3z" fill="#ffffff"/><path d="M3 21l4-1 1 4-4 1-1-4z" transform="translate(3 -2) rotate(-20 8 18)" fill="#dcdcdc"/><circle cx="10" cy="9" r="2" fill="#0b1220" stroke="#fff" stroke-width="0.6"/></g></svg>')
+            12 12,
+        crosshair;
+}
+
+/* Photoshop-like 将吸管缩小版本用于更清晰的指针 (fallback) */
+.cursor-picker-small {
+    cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><g fill="none" stroke="black" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4c0 1-1 2-2 3l-5 5c-1 1-2 1-3 0-1-1-1-2 0-3l5-5c1-1 2-2 3-2z" fill="#fff"/><circle cx="8" cy="7" r="1.5" fill="#0b1220" stroke="#fff" stroke-width="0.5"/></g></svg>')
+            10 10,
+        crosshair;
+}
+
+/* 复制提示小气泡，当用户点击复制时在指针附近短暂显示 */
+.copy-toast {
+    position: fixed;
+    pointer-events: none;
+    z-index: 80;
+    transform: translate(-50%, -140%);
+    background: rgba(34, 40, 48, 0.98);
+    color: #e6eefc;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    transition: opacity 200ms cubic-bezier(0.2, 0.9, 0.2, 1), transform 220ms cubic-bezier(0.2, 0.9, 0.2, 1);
+    opacity: 0;
+    transform-origin: center top;
+}
+.copy-toast.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+.copy-toast.leaving {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+}
+
+/* 顶部居中 toast 容器内的单个 toast 覆盖样式 */
+.toast-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 按钮组样式：让 HEX/RGB 成为一组选择按钮 */
+.btn-group {
+    display: inline-flex;
+    background: linear-gradient(180deg, #20262b, #15181b);
+    border-radius: 10px;
+    padding: 4px;
+    gap: 6px;
+    border: 1px solid #29323a;
+}
+.btn-group button {
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: transparent;
+    border: 0;
+    color: #e6eefc;
+    cursor: pointer;
+}
+.btn-group button.on {
+    background: linear-gradient(180deg, #305bff, #1c4bd6);
+    color: #fff;
+    box-shadow: 0 6px 18px rgba(28, 75, 214, 0.12);
+}
+
+/* 拖拽/按住空格时的抓手样式（active） */
+.cursor-pan.grabbing,
+.cursor-pan:active {
+    cursor: grabbing;
 }
 .app-header .hint {
     font-size: 12px;
@@ -226,6 +327,13 @@ a {
     transition: opacity 140ms ease, transform 120ms ease, box-shadow 120ms ease;
     pointer-events: none;
 }
+/* 删除按钮的 hover 特效：轻微放大内阴影与高亮，不影响父元素的 hover 状态 */
+.thumb-wrapper:hover .thumb-del:hover {
+    transform: none;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.36), 0 0 0 3px rgba(255, 77, 79, 0.06) inset;
+    background: #fffaf9;
+    color: #b22;
+}
 .thumb-wrapper:hover .thumb-del {
     opacity: 1;
     pointer-events: auto;
@@ -233,6 +341,7 @@ a {
 .thumb-del:hover {
     /* 不使用上浮（translate）效果，仅保留轻微阴影反馈 */
     box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28);
+    transform: none;
 }
 .tools button {
     padding: 8px 12px;
@@ -366,6 +475,20 @@ a {
     font-size: 11px;
     color: #ffd98a;
     opacity: 0.95;
+}
+
+/* 测量随鼠标浮动的小提示框 */
+.measure-tip {
+    position: fixed; /* 使用固定定位以便直接跟随 client 坐标 */
+    pointer-events: none;
+    z-index: 60;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 250, 0.95));
+    color: #222;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 /* 滚动条 */
