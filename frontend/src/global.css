@@ -527,4 +527,81 @@ a {
     background: #314253;
 }
 
+/* 选区信息面板的滚动条，与左侧文件栏一致 */
+.selection-colors-list::-webkit-scrollbar {
+    width: 8px;
+}
+.selection-colors-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+.selection-colors-list::-webkit-scrollbar-thumb {
+    background: #24303c;
+    border-radius: 4px;
+}
+.selection-colors-list::-webkit-scrollbar-thumb:hover {
+    background: #314253;
+}
+
+/* 颜色项默认使用透明边框以避免 hover 时高度变化 */
+.selection-colors-list > div {
+    border: 1px solid transparent;
+}
+.selection-colors-list > div:hover {
+    border-color: rgba(0, 180, 255, 0.14);
+}
+
+/* 新的颜色列表可复用类 */
+.color-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    overflow-y: auto;
+    padding: 0;
+    margin: 0;
+}
+.color-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.04);
+    cursor: pointer;
+    transition: background 0.12s ease, box-shadow 0.12s ease, border-color 0.12s;
+    border: 1px solid transparent; /* 保持固定高度，hover 只改变边框颜色 */
+    box-sizing: border-box;
+}
+.color-item:focus {
+    outline: none;
+    box-shadow: 0 6px 14px rgba(0, 180, 255, 0.06);
+}
+.color-item:hover {
+    background: rgba(0, 180, 255, 0.08);
+    box-shadow: 0 6px 14px rgba(0, 180, 255, 0.06);
+    border-color: rgba(0, 180, 255, 0.14);
+}
+.color-item:active {
+    transform: translateY(0);
+}
+.color-swatch {
+    width: 18px;
+    height: 18px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    box-sizing: border-box;
+    border-radius: 3px;
+}
+.color-hex {
+    font-size: 12px;
+}
+.color-count {
+    font-size: 12px;
+    color: #999;
+}
+
+/* ensure info-panel allows internal scrolling with pointer wheel */
+.info-panel .selection-colors .color-list {
+    max-height: 220px;
+    padding-right: 6px;
+}
+
 /* 工具提示小状态条可以进一步美化 */

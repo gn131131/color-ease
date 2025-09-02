@@ -36,6 +36,8 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const toast = useToast();
 
     const containerRef = useRef<HTMLDivElement | null>(null);
+    const infoPanelRef = useRef<HTMLDivElement | null>(null);
+    const selectionListRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const offscreenRef = useRef<HTMLCanvasElement | null>(null);
     const viewState = useRef({ x: 0, y: 0, dragging: false, lastX: 0, lastY: 0 });
@@ -50,11 +52,21 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const hoverPixelRef = useRef<{ x: number; y: number } | null>(null);
     // 框选相关
     const selectingRef = useRef(false);
+    const possibleSelectionRef = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
     const [selection, setSelection] = useState<{
         start: { x: number; y: number } | null;
         end: { x: number; y: number } | null;
         colors: Array<{ hex: string; count: number }>;
     }>({ start: null, end: null, colors: [] });
+    const selectionRef = useRef(selection);
+
+    const updateSelection = (v: typeof selection | ((s: typeof selection) => typeof selection)) => {
+        setSelection((prev) => {
+            const next = typeof v === "function" ? (v as any)(prev) : v;
+            selectionRef.current = next;
+            return next;
+        });
+    };
 
     const activeImage = images.find((i) => i.id === activeId) || null;
 
@@ -289,10 +301,11 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             ctx.restore();
         }
 
-        // 绘制框选高亮（基于 image 像素索引）
-        if (selection.start && selection.end) {
-            const s = selection.start;
-            const e2 = selection.end;
+        // 绘制选区蒙版（高亮蒙版：遮罩全图，选区保留）
+        const sel = selectionRef.current;
+        if (sel.start && sel.end) {
+            const s = sel.start;
+            const e2 = sel.end;
             const sx = Math.min(s.x, e2.x);
             const sy = Math.min(s.y, e2.y);
             const ex = Math.max(s.x, e2.x);
@@ -303,10 +316,17 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             const w = (ex - sx + 1) * pixelScale; // inclusive pixels
             const h = (ey - sy + 1) * pixelScale;
             ctx.save();
-            ctx.fillStyle = "rgba(0,128,255,0.12)";
-            ctx.fillRect(left, top, w, h);
-            ctx.strokeStyle = "rgba(0,128,255,0.9)";
-            ctx.lineWidth = Math.max(1 / dpr, 1);
+            // Use even-odd fill to draw a mask with a hole for the selection (more robust than composite ops)
+            ctx.beginPath();
+            ctx.rect(0, 0, box.width, box.height);
+            ctx.rect(left, top, w, h);
+            ctx.fillStyle = "rgba(0,0,0,0.45)";
+            // 'evenodd' will fill the outer rect but leave the inner rect as a hole
+            // @ts-ignore - some TS libs lack overload typing for fill("evenodd")
+            ctx.fill("evenodd");
+            // draw selection border
+            ctx.strokeStyle = "rgba(0,180,255,0.95)";
+            ctx.lineWidth = Math.max(2 / dpr, 1.5);
             ctx.strokeRect(left + 0.5 * ctx.lineWidth, top + 0.5 * ctx.lineWidth, Math.max(0, w - ctx.lineWidth), Math.max(0, h - ctx.lineWidth));
             ctx.restore();
         }
@@ -351,6 +371,37 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     useEffect(() => {
         draw();
     }, [draw]);
+
+    // 动态计算选区颜色列表的最大高度，确保不超过预览面板可见高度（减去 info-panel 的上下间距）
+    useEffect(() => {
+        const updateMax = () => {
+            const list = selectionListRef.current;
+            const container = containerRef.current;
+            if (!list || !container) return;
+            const containerBox = container.getBoundingClientRect();
+            const listBox = list.getBoundingClientRect();
+            // 计算列表顶部距离容器顶部的距离，作为上下间距（使上下对称）
+            const topGap = Math.max(8, Math.round(listBox.top - containerBox.top));
+            // 可用高度 = 容器高度 - topGap - bottomGap(topGap) = container.height - 2*topGap
+            const available = Math.max(80, Math.round(containerBox.height - 2 * topGap));
+            list.style.maxHeight = available + "px";
+        };
+
+        // 使用 ResizeObserver 监听容器 / 面板 / 列表 的尺寸变化，配合 window resize 做快速响应
+        const ro = new ResizeObserver(() => requestAnimationFrame(updateMax));
+        if (containerRef.current) ro.observe(containerRef.current);
+        if (infoPanelRef.current) ro.observe(infoPanelRef.current);
+        if (selectionListRef.current) ro.observe(selectionListRef.current);
+
+        const onWin = () => requestAnimationFrame(updateMax);
+        window.addEventListener("resize", onWin);
+        // initial
+        requestAnimationFrame(updateMax);
+        return () => {
+            ro.disconnect();
+            window.removeEventListener("resize", onWin);
+        };
+    }, [selection.colors, infoPanelPosition]);
 
     // 当切换工具：如果离开量测工具，清空画板上的测量线与提示
     useEffect(() => {
@@ -457,6 +508,10 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const handleWheelNative = useCallback(
         (e: WheelEvent) => {
             if (!activeImage) return;
+            // 如果滚轮事件来自 infoPanel，则让其自然滚动（不要 preventDefault），以便信息面板内部能滚动
+            if (infoPanelRef.current && e.target instanceof Node && infoPanelRef.current.contains(e.target as Node)) {
+                return;
+            }
             e.preventDefault();
             // 标记为交互中，暂停网格绘制
             isInteractingRef.current = true;
@@ -474,6 +529,10 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             const pos = toImageCoord(e.clientX, e.clientY);
             if (pos) {
                 // 计算 clampedScale 后直接设置 viewState，使指针位置的图像像素映射到相同屏幕坐标
+                // 如果滚轮事件来自 infoPanel，则忽略缩放
+                if (infoPanelRef.current && e.target instanceof Node && infoPanelRef.current.contains(e.target as Node)) {
+                    return;
+                }
                 const canvas = canvasRef.current!;
                 const rect = canvas.getBoundingClientRect();
                 const dpr = window.devicePixelRatio || 1;
@@ -531,6 +590,10 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         if (!node) return;
         node.addEventListener("wheel", handleWheelNative, { passive: false });
         const keyDown = (ev: KeyboardEvent) => {
+            // 如果按键事件的目标在信息面板内，则忽略全局快捷键以避免冲突
+            if (infoPanelRef.current && ev.target instanceof Node && infoPanelRef.current.contains(ev.target as Node)) {
+                return;
+            }
             if (ev.code === "Space") {
                 spacePressedRef.current = true;
                 ev.preventDefault();
@@ -572,26 +635,10 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             viewState.current.lastX = e.clientX;
             viewState.current.lastY = e.clientY;
         } else if (tool === "picker") {
+            // record possible click/select start; actual action decided on pointerup or move
             const pos = toImageCoord(e.clientX, e.clientY);
             if (pos) {
-                const hex = pickColorAt(pos.x, pos.y);
-                // 单击画布时复制当前颜色（以 colorMode 格式）
-                if (hex) {
-                    const text = formatColor(hex);
-                    // 尝试写入剪贴板并根据结果显示全局提示
-                    try {
-                        navigator.clipboard
-                            .writeText(text)
-                            .then(() => {
-                                toast.show("已复制");
-                            })
-                            .catch(() => {
-                                toast.show("复制失败");
-                            });
-                    } catch (err) {
-                        toast.show("复制失败");
-                    }
-                }
+                possibleSelectionRef.current = { x: Math.floor(pos.x), y: Math.floor(pos.y), clientX: e.clientX, clientY: e.clientY };
             }
         } else if (tool === "measure") {
             const pos = toImageCoord(e.clientX, e.clientY);
@@ -604,16 +651,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 setMeasureTip({ visible: false, x: e.clientX, y: e.clientY, text: "" });
             }
         }
-        // 框选：当在 picker 工具且按下 Shift 或 鼠标右键/中键（也可直接拖选），开始选择
-        if (tool === "picker" && e.button === 0 && (e.shiftKey || e.ctrlKey || e.altKey)) {
-            // 开始框选，记录像素索引（向下取整）
-            const posStart = toImageCoord(e.clientX, e.clientY);
-            if (posStart) {
-                selectingRef.current = true;
-                const p = { x: Math.floor(posStart.x), y: Math.floor(posStart.y) };
-                setSelection({ start: p, end: p, colors: [] });
-            }
-        }
+        // don't immediately start selection here; use possibleSelectionRef and move threshold to decide
     };
     const handlePointerMove: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
         // update shift state each move
@@ -656,10 +694,25 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             if (pos) {
                 setStatus(`位置: ${Math.floor(pos.x)},${Math.floor(pos.y)}`);
                 // 更新框选区域（如果正在框选）
-                if (selectingRef.current && selection.start) {
+                if (selectingRef.current && selectionRef.current.start) {
                     const p = { x: Math.floor(pos.x), y: Math.floor(pos.y) };
-                    setSelection((s) => ({ ...s, end: p }));
+                    updateSelection((s) => ({ ...s, end: p }));
                     draw();
+                } else if (possibleSelectionRef.current) {
+                    // decide whether to start selection: use client delta threshold to avoid accidental tiny moves
+                    const dx = e.clientX - possibleSelectionRef.current.clientX;
+                    const dy = e.clientY - possibleSelectionRef.current.clientY;
+                    const dist2 = dx * dx + dy * dy;
+                    if (dist2 > 16) {
+                        // if modifier key pressed or allow drag to select regardless? Start selection if modifier present or always start on drag
+                        if (e.shiftKey || e.ctrlKey || e.altKey || true) {
+                            selectingRef.current = true;
+                            const start = { x: possibleSelectionRef.current.x, y: possibleSelectionRef.current.y };
+                            updateSelection({ start, end: start, colors: [] });
+                            draw();
+                        }
+                        possibleSelectionRef.current = null;
+                    }
                 }
             }
         } else if (tool === "measure") {
@@ -713,17 +766,39 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         // clear shift/snapping when pointer released
         shiftPressedRef.current = false;
         snappingRef.current = { active: false, axis: null };
-        // 结束框选
-        if (selectingRef.current && selection.start) {
+        // 如果存在 possibleSelectionRef 且未发生拖拽（selectingRef 未被触发），视为单击：取色并复制
+        if (!selectingRef.current && possibleSelectionRef.current && tool === "picker") {
+            const p = possibleSelectionRef.current;
+            possibleSelectionRef.current = null;
+            const hex = pickColorAt(p.x, p.y);
+            if (hex) {
+                const text = formatColor(hex);
+                try {
+                    navigator.clipboard
+                        .writeText(text)
+                        .then(() => {
+                            toast.show("已复制");
+                        })
+                        .catch(() => {
+                            toast.show("复制失败");
+                        });
+                } catch (err) {
+                    toast.show("复制失败");
+                }
+            }
+        }
+
+        // 结束框选：如果正在框选，将选区固定并统计颜色
+        if (selectingRef.current && selectionRef.current.start) {
             selectingRef.current = false;
             // ensure selection.end exists
-            const end = selection.end || selection.start;
-            setSelection((s) => ({ ...s, end }));
+            const end = selectionRef.current.end || selectionRef.current.start;
+            updateSelection((s) => ({ ...s, end }));
             // 统计颜色并更新信息面板
             setTimeout(() => {
-                if (activeImage) {
-                    const stats = pickColorsInSelection(selection.start!, end!);
-                    setSelection((s) => ({ ...s, colors: stats }));
+                if (activeImage && selectionRef.current.start) {
+                    const stats = pickColorsInSelection(selectionRef.current.start!, end!);
+                    updateSelection((s) => ({ ...s, colors: stats }));
                     draw();
                 }
             }, 0);
@@ -743,6 +818,15 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             // switch back to picker (or default tool)
             setTool("picker");
             // ensure canvas updated
+            setTimeout(() => draw(), 0);
+        }
+        // Right-click in picker: cancel selection
+        if (tool === "picker") {
+            e.preventDefault();
+            e.stopPropagation();
+            selectingRef.current = false;
+            possibleSelectionRef.current = null;
+            updateSelection({ start: null, end: null, colors: [] });
             setTimeout(() => draw(), 0);
         }
     };
@@ -882,7 +966,21 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                     onContextMenu={handleContextMenu}
                 />
 
-                <div className={`info-panel ${infoPanelPosition}`} onMouseEnter={() => setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"))}>
+                <div
+                    ref={infoPanelRef}
+                    className={`info-panel ${infoPanelPosition}`}
+                    onMouseEnter={() => {
+                        // 无选区时，鼠标移入切换位置（恢复之前行为）
+                        if (!selectionRef.current || !selectionRef.current.start) {
+                            setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"));
+                        }
+                    }}
+                    onClick={() => {
+                        // 点击也允许切换（但若存在选区则不切换）
+                        if (selectionRef.current && selectionRef.current.start) return;
+                        setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"));
+                    }}
+                >
                     <div className="info-content">
                         <div className="info-line small">取色：{formatColor(color)}</div>
                         {/* 测距的数值改为随鼠标浮动提示，不在信息面板展示 */}
@@ -891,12 +989,35 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         {selection.colors && selection.colors.length > 0 && (
                             <div className="info-line small selection-colors">
                                 <div style={{ fontSize: 12, marginBottom: 6 }}>选区颜色（按像素数）:</div>
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                <div ref={selectionListRef} className="selection-colors-list color-list" role="list" aria-label="选区颜色" style={{ paddingRight: 6 }}>
                                     {selection.colors.slice(0, 20).map((c) => (
-                                        <div key={c.hex} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", borderRadius: 4, background: "rgba(0,0,0,0.06)" }}>
-                                            <div style={{ width: 18, height: 18, background: c.hex, border: "1px solid rgba(0,0,0,0.12)", boxSizing: "border-box" }} />
-                                            <div style={{ fontSize: 12 }}>{c.hex}</div>
-                                            <div style={{ fontSize: 12, color: "#999" }}>{c.count}</div>
+                                        <div
+                                            key={c.hex}
+                                            role="listitem"
+                                            tabIndex={0}
+                                            className="color-item"
+                                            onClick={() => {
+                                                try {
+                                                    const txt = formatColor(c.hex);
+                                                    navigator.clipboard.writeText(txt).then(() => toast.show("已复制"));
+                                                } catch (err) {
+                                                    toast.show("复制失败");
+                                                }
+                                            }}
+                                            onKeyDown={(ev) => {
+                                                if (ev.key === "Enter" || ev.key === " ") {
+                                                    try {
+                                                        const txt = formatColor(c.hex);
+                                                        navigator.clipboard.writeText(txt).then(() => toast.show("已复制"));
+                                                    } catch (err) {
+                                                        toast.show("复制失败");
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            <div className="color-swatch" style={{ background: c.hex }} />
+                                            <div className="color-hex">{formatColor(c.hex)}</div>
+                                            <div className="color-count">{c.count}</div>
                                         </div>
                                     ))}
                                 </div>
