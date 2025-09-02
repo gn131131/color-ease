@@ -22,7 +22,7 @@ export const App: React.FC = () => {
     return (
         <div className="app-root">
             <header className="app-header">
-                <h1>图像工具实验台</h1>
+                <h1>Color Ease — 取色与调色板工具</h1>
                 <div className="header-actions">
                     <button className={tool === "measure" ? "on" : ""} onClick={() => setTool(tool === "measure" ? "picker" : "measure")}>
                         {tool === "measure" ? "退出测量" : "量长度"}
