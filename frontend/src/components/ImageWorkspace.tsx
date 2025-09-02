@@ -48,6 +48,13 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const [infoPanelPosition, setInfoPanelPosition] = useState<"top" | "bottom">("top");
     const [isDragging, setIsDragging] = useState(false);
     const hoverPixelRef = useRef<{ x: number; y: number } | null>(null);
+    // 框选相关
+    const selectingRef = useRef(false);
+    const [selection, setSelection] = useState<{
+        start: { x: number; y: number } | null;
+        end: { x: number; y: number } | null;
+        colors: Array<{ hex: string; count: number }>;
+    }>({ start: null, end: null, colors: [] });
 
     const activeImage = images.find((i) => i.id === activeId) || null;
 
@@ -279,6 +286,28 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 ctx.lineTo(left + cols * pixelScale, y);
                 ctx.stroke();
             }
+            ctx.restore();
+        }
+
+        // 绘制框选高亮（基于 image 像素索引）
+        if (selection.start && selection.end) {
+            const s = selection.start;
+            const e2 = selection.end;
+            const sx = Math.min(s.x, e2.x);
+            const sy = Math.min(s.y, e2.y);
+            const ex = Math.max(s.x, e2.x);
+            const ey = Math.max(s.y, e2.y);
+            // 映射到屏幕
+            const left = cx + sx * pixelScale;
+            const top = cy + sy * pixelScale;
+            const w = (ex - sx + 1) * pixelScale; // inclusive pixels
+            const h = (ey - sy + 1) * pixelScale;
+            ctx.save();
+            ctx.fillStyle = "rgba(0,128,255,0.12)";
+            ctx.fillRect(left, top, w, h);
+            ctx.strokeStyle = "rgba(0,128,255,0.9)";
+            ctx.lineWidth = Math.max(1 / dpr, 1);
+            ctx.strokeRect(left + 0.5 * ctx.lineWidth, top + 0.5 * ctx.lineWidth, Math.max(0, w - ctx.lineWidth), Math.max(0, h - ctx.lineWidth));
             ctx.restore();
         }
     }, [activeImage, scale, measure]);
@@ -575,6 +604,16 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 setMeasureTip({ visible: false, x: e.clientX, y: e.clientY, text: "" });
             }
         }
+        // 框选：当在 picker 工具且按下 Shift 或 鼠标右键/中键（也可直接拖选），开始选择
+        if (tool === "picker" && e.button === 0 && (e.shiftKey || e.ctrlKey || e.altKey)) {
+            // 开始框选，记录像素索引（向下取整）
+            const posStart = toImageCoord(e.clientX, e.clientY);
+            if (posStart) {
+                selectingRef.current = true;
+                const p = { x: Math.floor(posStart.x), y: Math.floor(posStart.y) };
+                setSelection({ start: p, end: p, colors: [] });
+            }
+        }
     };
     const handlePointerMove: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
         // update shift state each move
@@ -614,7 +653,15 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             draw();
         } else if (tool === "picker") {
             const pos = toImageCoord(e.clientX, e.clientY);
-            if (pos) setStatus(`位置: ${Math.floor(pos.x)},${Math.floor(pos.y)}`);
+            if (pos) {
+                setStatus(`位置: ${Math.floor(pos.x)},${Math.floor(pos.y)}`);
+                // 更新框选区域（如果正在框选）
+                if (selectingRef.current && selection.start) {
+                    const p = { x: Math.floor(pos.x), y: Math.floor(pos.y) };
+                    setSelection((s) => ({ ...s, end: p }));
+                    draw();
+                }
+            }
         } else if (tool === "measure") {
             if (measure.start) {
                 const pos = toImageCoord(e.clientX, e.clientY);
@@ -666,6 +713,21 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         // clear shift/snapping when pointer released
         shiftPressedRef.current = false;
         snappingRef.current = { active: false, axis: null };
+        // 结束框选
+        if (selectingRef.current && selection.start) {
+            selectingRef.current = false;
+            // ensure selection.end exists
+            const end = selection.end || selection.start;
+            setSelection((s) => ({ ...s, end }));
+            // 统计颜色并更新信息面板
+            setTimeout(() => {
+                if (activeImage) {
+                    const stats = pickColorsInSelection(selection.start!, end!);
+                    setSelection((s) => ({ ...s, colors: stats }));
+                    draw();
+                }
+            }, 0);
+        }
         // 隐藏测量浮动提示（测量结束或取消）
         setMeasureTip((t) => ({ ...t, visible: false }));
     };
@@ -698,6 +760,42 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         const hexU = hex.toUpperCase();
         setColor(hexU);
         return hexU;
+    };
+
+    // 统计选区内不重复颜色（排除 alpha === 0），返回按 count 降序的数组
+    const pickColorsInSelection = (start: { x: number; y: number }, end: { x: number; y: number }) => {
+        if (!activeImage) return [] as Array<{ hex: string; count: number }>;
+        const sx = Math.max(0, Math.min(start.x, end.x));
+        const sy = Math.max(0, Math.min(start.y, end.y));
+        const ex = Math.min(activeImage.width - 1, Math.max(start.x, end.x));
+        const ey = Math.min(activeImage.height - 1, Math.max(start.y, end.y));
+        const w = ex - sx + 1;
+        const h = ey - sy + 1;
+        if (w <= 0 || h <= 0) return [];
+        const off = offscreenRef.current!;
+        off.width = activeImage.width;
+        off.height = activeImage.height;
+        const octx = off.getContext("2d")!;
+        octx.drawImage(activeImage.img, 0, 0);
+        const imgData = octx.getImageData(sx, sy, w, h).data;
+        const map = new Map<string, number>();
+        for (let i = 0; i < imgData.length; i += 4) {
+            const a = imgData[i + 3];
+            if (a === 0) continue; // skip fully transparent
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+            const hex =
+                "#" +
+                [r, g, b]
+                    .map((v) => v.toString(16).padStart(2, "0"))
+                    .join("")
+                    .toUpperCase();
+            map.set(hex, (map.get(hex) || 0) + 1);
+        }
+        const arr = Array.from(map.entries()).map(([hex, count]) => ({ hex, count }));
+        arr.sort((a, b) => b.count - a.count);
+        return arr;
     };
 
     const handleFileInput: React.ChangeEventHandler<HTMLInputElement> = (e) => {
@@ -789,7 +887,21 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         <div className="info-line small">取色：{formatColor(color)}</div>
                         {/* 测距的数值改为随鼠标浮动提示，不在信息面板展示 */}
                         <div className="info-line small measure-hint">{status}</div>
-                        {/* 可单击的色块也可以放到 info-panel，如果需要，我可以在这里添加 */}
+                        {/* 框选颜色统计 */}
+                        {selection.colors && selection.colors.length > 0 && (
+                            <div className="info-line small selection-colors">
+                                <div style={{ fontSize: 12, marginBottom: 6 }}>选区颜色（按像素数）:</div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                    {selection.colors.slice(0, 20).map((c) => (
+                                        <div key={c.hex} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", borderRadius: 4, background: "rgba(0,0,0,0.06)" }}>
+                                            <div style={{ width: 18, height: 18, background: c.hex, border: "1px solid rgba(0,0,0,0.12)", boxSizing: "border-box" }} />
+                                            <div style={{ fontSize: 12 }}>{c.hex}</div>
+                                            <div style={{ fontSize: 12, color: "#999" }}>{c.count}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
                 {/* 测量随鼠标浮动提示框 */}
