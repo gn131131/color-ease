@@ -35,6 +35,12 @@ a {
     font-size: 20px;
     font-weight: 600;
 }
+.app-header .header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
 .app-header .header-actions button {
     padding: 6px 10px;
     border-radius: 8px;
@@ -127,17 +133,32 @@ a {
     display: inline-flex;
     background: linear-gradient(180deg, #20262b, #15181b);
     border-radius: 10px;
-    padding: 4px;
-    gap: 6px;
+    overflow: hidden;
     border: 1px solid #29323a;
 }
 .btn-group button {
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: transparent;
+    padding: 6px 12px;
     border: 0;
+    background: transparent;
     color: #e6eefc;
     cursor: pointer;
+    position: relative;
+}
+/* 分隔线：除了第一个按钮外在左侧画一条细线，营造分割感但不破坏整体圆角 */
+.btn-group button:not(:first-child)::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background: rgba(255, 255, 255, 0.04);
+}
+.btn-group button:first-child {
+    border-radius: 8px 0 0 8px;
+}
+.btn-group button:last-child {
+    border-radius: 0 8px 8px 0;
 }
 .btn-group button.on {
     background: linear-gradient(180deg, #305bff, #1c4bd6);
