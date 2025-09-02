@@ -14,12 +14,11 @@ type Tool = "picker" | "measure"; // 去掉 pan 按钮，使用 Space 拖拽
 // 阈值：当缩放倍数超过该值时显示像素网格
 const GRID_SHOW_SCALE = 8;
 
-export const ImageWorkspace: React.FC = () => {
+export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void }> = ({ tool, setTool }) => {
     const [images, setImages] = useState<LoadedImage[]>([]);
     const [activeId, setActiveId] = useState<string | null>(null);
     const [scale, setScale] = useState(1);
     const [minScale, setMinScale] = useState(1);
-    const [tool, setTool] = useState<Tool>("picker");
     const spacePressedRef = useRef(false);
     const tabPressedRef = useRef(false);
     const [, forceKeyState] = useState(0);
@@ -35,6 +34,9 @@ export const ImageWorkspace: React.FC = () => {
     const interactionTimerRef = useRef<number | null>(null);
     const scaleRef = useRef(scale);
     const debugRef = useRef(true); // 打开调试日志
+    const shiftPressedRef = useRef(false);
+    const snappingRef = useRef<{ active: boolean; axis: "h" | "v" | null; x?: number; y?: number }>({ active: false, axis: null });
+    const [infoPanelPosition, setInfoPanelPosition] = useState<"top" | "bottom">("top");
 
     const activeImage = images.find((i) => i.id === activeId) || null;
 
@@ -171,6 +173,30 @@ export const ImageWorkspace: React.FC = () => {
             if (measure.distance) {
                 ctx.font = "12px sans-serif";
                 ctx.fillText(measure.distance.toFixed(1) + "px", (s1.sx + s2.sx) / 2 + 4, (s1.sy + s2.sy) / 2 + 4);
+            }
+            ctx.restore();
+        }
+
+        // 吸附视觉提示：当用户按住 shift 并在测量中时，绘制锁定轴线（虚线）
+        if (snappingRef.current.active && measure.start) {
+            const start = measure.start;
+            const axis = snappingRef.current.axis;
+            ctx.save();
+            ctx.strokeStyle = "rgba(255,200,60,0.85)";
+            ctx.setLineDash([6, 6]);
+            ctx.lineWidth = Math.max(1 / dpr, 1);
+            if (axis === "h") {
+                const y = cy + start.y * pixelScale;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(box.width, y);
+                ctx.stroke();
+            } else if (axis === "v") {
+                const x = cx + start.x * pixelScale;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, box.height);
+                ctx.stroke();
             }
             ctx.restore();
         }
@@ -431,6 +457,8 @@ export const ImageWorkspace: React.FC = () => {
     const handlePointerDown: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
         const canvas = canvasRef.current!;
         canvas.setPointerCapture(e.pointerId);
+        // track shift
+        shiftPressedRef.current = e.shiftKey;
         if (spacePressedRef.current) {
             viewState.current.dragging = true;
             viewState.current.lastX = e.clientX;
@@ -442,10 +470,14 @@ export const ImageWorkspace: React.FC = () => {
             const pos = toImageCoord(e.clientX, e.clientY);
             if (pos) {
                 setMeasure({ start: { x: Math.floor(pos.x), y: Math.floor(pos.y) }, end: null, distance: null });
+                // reset snapping
+                snappingRef.current = { active: !!e.shiftKey, axis: null };
             }
         }
     };
     const handlePointerMove: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
+        // update shift state each move
+        shiftPressedRef.current = e.shiftKey;
         if (viewState.current.dragging) {
             const dx = e.clientX - viewState.current.lastX;
             const dy = e.clientY - viewState.current.lastY;
@@ -478,10 +510,14 @@ export const ImageWorkspace: React.FC = () => {
                         if (Math.abs(dx) >= Math.abs(dy)) {
                             // 水平吸附，锁定 y
                             ey = measure.start.y;
+                            snappingRef.current = { active: true, axis: "h" };
                         } else {
                             // 垂直吸附，锁定 x
                             ex = measure.start.x;
+                            snappingRef.current = { active: true, axis: "v" };
                         }
+                    } else {
+                        snappingRef.current = { active: false, axis: null };
                     }
                     const end = { x: ex, y: ey };
                     const dx2 = end.x - measure.start.x;
@@ -499,6 +535,9 @@ export const ImageWorkspace: React.FC = () => {
             clampView();
             draw();
         }
+        // clear shift/snapping when pointer released
+        shiftPressedRef.current = false;
+        snappingRef.current = { active: false, axis: null };
     };
 
     const pickColorAt = (ix: number, iy: number) => {
@@ -574,29 +613,13 @@ export const ImageWorkspace: React.FC = () => {
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
                 />
-            </div>
-            <div className="right-bar">
-                <div className="section">
-                    <div className="tools">
-                        <button
-                            className={tool === "measure" ? "on" : ""}
-                            onClick={() => {
-                                setTool(tool === "measure" ? "picker" : "measure");
-                                setMeasure({ start: null, end: null, distance: null });
-                            }}
-                        >
-                            {tool === "measure" ? "退出测量" : "量长度"}
-                        </button>
-                        {/* 重置视图按钮已移除 */}
+
+                <div className={`info-panel ${infoPanelPosition}`} onMouseEnter={() => setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"))}>
+                    <div className="info-content">
+                        <div className="info-line small">取色：{color}</div>
+                        {measure.distance && measure.start && measure.end && <div className="info-line small">{measure.distance.toFixed(1)} px</div>}
+                        <div className="info-line small measure-hint">{status}</div>
                     </div>
-                    {/* 当前缩放展示已移除 */}
-                    <div className="info-line">取色结果：{color}</div>
-                    {measure.distance && measure.start && measure.end && (
-                        <div className="info-line">
-                            测量：({measure.start.x},{measure.start.y}) → ({measure.end.x},{measure.end.y}) = {measure.distance.toFixed(1)} px
-                        </div>
-                    )}
-                    <div className="info-line status">{status}</div>
                 </div>
             </div>
         </div>
