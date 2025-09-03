@@ -133,8 +133,8 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const computeMinScale = useCallback((imgW: number, imgH: number) => {
         const box = containerRef.current?.getBoundingClientRect();
         if (!box) return 1;
-        // 最小缩放：短边必须填满容器对应边 => cover 模式 (max)
-        return Math.max(box.width / imgW, box.height / imgH);
+        // 最小缩放：确保整张图片可见 => contain 模式 (min)
+        return Math.min(box.width / imgW, box.height / imgH);
     }, []);
 
     // 加载文件
@@ -835,6 +835,18 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         canvas.setPointerCapture(e.pointerId);
         // track shift
         shiftPressedRef.current = e.shiftKey;
+        // support middle-button pan: start dragging when middle button pressed
+        if ((e as any).button === 1) {
+            // prevent default middle-click behaviors (auto-scroll)
+            try {
+                e.preventDefault();
+            } catch (err) {}
+            viewState.current.dragging = true;
+            setIsDragging(true);
+            viewState.current.lastX = e.clientX;
+            viewState.current.lastY = e.clientY;
+            return;
+        }
         if (spacePressedRef.current) {
             viewState.current.dragging = true;
             setIsDragging(true);
@@ -844,7 +856,10 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             // record possible click/select start; actual action decided on pointerup or move
             const pos = toImageCoord(e.clientX, e.clientY);
             if (pos) {
-                possibleSelectionRef.current = { x: Math.floor(pos.x), y: Math.floor(pos.y), clientX: e.clientX, clientY: e.clientY };
+                // only treat primary (left) button as start of a potential selection
+                if ((e as any).button === 0) {
+                    possibleSelectionRef.current = { x: Math.floor(pos.x), y: Math.floor(pos.y), clientX: e.clientX, clientY: e.clientY };
+                }
             }
         } else if (tool === "measure") {
             const pos = toImageCoord(e.clientX, e.clientY);
@@ -1034,6 +1049,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         }
     };
     const handlePointerUp: React.PointerEventHandler<HTMLCanvasElement> = (e) => {
+        // Stop dragging for both space-pan and middle-button pan
         if (viewState.current.dragging) {
             viewState.current.dragging = false;
             setIsDragging(false);
@@ -1048,17 +1064,13 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         // clear shift/snapping when pointer released
         shiftPressedRef.current = false;
         snappingRef.current = { active: false, axis: null };
+
         // 如果存在 possibleSelectionRef 且未发生拖拽（selectingRef 未被触发），视为单击：仅在左键（button === 0）时取色并复制
         if (!selectingRef.current && possibleSelectionRef.current && tool === "picker") {
             const p = possibleSelectionRef.current;
-            // clear possibleSelectionRef regardless of button to avoid stale state
             possibleSelectionRef.current = null;
-            // only handle left-button clicks for copying (prevent right-click from copying)
-            // PointerEvent.button: 0 = primary/left, 1 = middle, 2 = secondary/right
             // @ts-ignore - React's PointerEvent typing includes button, but keep safe
-            if ((e as any).button !== 0) {
-                // do not copy on non-left buttons
-            } else {
+            if ((e as any).button === 0) {
                 const hex = pickColorAt(p.x, p.y);
                 if (hex) {
                     const text = formatColor(hex);
@@ -1280,9 +1292,9 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             <div className="canvas-area" ref={containerRef}>
                 <canvas
                     ref={canvasRef}
-                    style={{ cursor: spacePressedRef.current ? (isDragging ? "grabbing" : "grab") : tool === "picker" ? pickerCursor : tool === "measure" ? "crosshair" : "default" }}
+                    style={{ cursor: spacePressedRef.current || isDragging ? (isDragging ? "grabbing" : "grab") : tool === "picker" ? pickerCursor : tool === "measure" ? "crosshair" : "default" }}
                     className={
-                        spacePressedRef.current
+                        spacePressedRef.current || isDragging
                             ? `cursor-pan ${isDragging ? "grabbing" : ""}`
                             : tool === "measure"
                             ? "cursor-measure"
