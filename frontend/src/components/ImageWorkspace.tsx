@@ -159,7 +159,13 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                     }
                 })
                 .catch((err) => {
-                    console.error(err);
+                    // 记录加载错误，供调试和监控使用，并提示用户
+                    console.error("Failed to load images:", err);
+                    try {
+                        toast.show("图片加载失败");
+                    } catch (e) {
+                        // ignore toast failures
+                    }
                 });
         },
         [activeId]
@@ -266,7 +272,8 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             }
             ctx.restore();
         } catch (err) {
-            console.error("overlay highlight failed", err);
+            // overlay 高亮失败不阻塞主要功能，保留简短错误信息以便排查
+            console.error("Overlay highlight error:", err);
         }
     }, [selectionHoverHex, activeImage]);
 
@@ -292,9 +299,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
 
         ctx.imageSmoothingEnabled = pixelScale < 4;
         ctx.drawImage(activeImage.img, cx, cy, imgWAligned, imgHAligned);
-        if (debugRef.current) {
-            console.debug("draw:", { scale, cx, cy, imgWAligned, imgHAligned, pixelScale, viewX: viewState.current.x, viewY: viewState.current.y });
-        }
+        // debugRef 用于运行时调试，目前在生产禁用详细日志
 
         // 测量线（使用对齐后的 pixelScale）
         if (measure.start && measure.end) {
@@ -732,9 +737,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 viewState.current.x = alignedX;
                 viewState.current.y = alignedY;
 
-                if (debugRef.current) {
-                    console.debug("wheel: anchored", { pos, desiredViewX, desiredViewY, pixelScale_after, imgW_after_raw, imgW_after_aligned });
-                }
+                // wheel 调试日志已移除
 
                 // 已使用锚点计算并设置 viewState（见上），无需额外的 raw 差值调整
             }
@@ -887,9 +890,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                     if (hx >= sx && hx <= ex && hy >= sy && hy <= ey) {
                         const sample = sampleHexAt(hx, hy);
                         const sampleU = sample ? sample.toUpperCase() : null;
-                        if (debugRef.current) {
-                            console.debug("sample inside selection:", { hx, hy, sampleU, selectionColors: selectionRef.current?.colors?.map((c) => c.hex) });
-                        }
+                        // 样本采样调试日志已移除
                         setSelectionHoverHex(sampleU);
                         try {
                             requestAnimationFrame(() => drawOverlay());
