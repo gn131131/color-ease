@@ -108,14 +108,16 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const pickerCursor = `url("data:image/svg+xml;utf8,${encodeURIComponent(pickerSvg)}") 0 28, crosshair`;
 
     // helpers: 计算当前画布/图片相关的对齐信息
-    const computeImageMetrics = (scaleVal = scale) => {
+    const computeImageMetrics = (scaleVal?: number) => {
+        // Prefer the latest scale in the ref to avoid stale state during fast wheel events
+        const sv = typeof scaleVal === "number" ? scaleVal : scaleRef.current;
         const canvas = canvasRef.current;
         if (!canvas || !activeImage) return null;
         const box = canvas.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
         const align = 1 / dpr;
-        const imgW = activeImage.width * scaleVal;
-        const imgH = activeImage.height * scaleVal;
+        const imgW = activeImage.width * sv;
+        const imgH = activeImage.height * sv;
         let cx = box.width / 2 - imgW / 2 + viewState.current.x;
         let cy = box.height / 2 - imgH / 2 + viewState.current.y;
         cx = Math.round(cx / align) * align;
@@ -210,7 +212,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         if (!ov) return;
         const ctx = ov.getContext("2d");
         if (!ctx) return;
-        const metrics = computeImageMetrics();
+        const metrics = computeImageMetrics(scaleRef.current);
         if (!metrics) return;
         const { box, dpr, cx, cy, pixelScale } = metrics as any;
         // 清空 overlay（以设备像素为单位）
@@ -612,7 +614,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     };
 
     const toImageCoord = (clientX: number, clientY: number) => {
-        const metrics = computeImageMetrics();
+        const metrics = computeImageMetrics(scaleRef.current);
         if (!metrics || !activeImage) return null;
         const { box, cx, cy, pixelScale } = metrics;
         const x = (clientX - box.left - cx) / pixelScale;
@@ -923,7 +925,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             viewState.current.x += dx;
             viewState.current.y += dy;
             // 对齐 viewState 到 device pixel 网格，避免拖动后出现子像素累积
-            const metrics = computeImageMetrics();
+            const metrics = computeImageMetrics(scaleRef.current);
             if (metrics) {
                 const { align } = metrics;
                 viewState.current.x = Math.round(viewState.current.x / align) * align;
