@@ -214,7 +214,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         if (!ctx) return;
         const metrics = computeImageMetrics(scaleRef.current);
         if (!metrics) return;
-        const { box, dpr, cx, cy, pixelScale } = metrics as any;
+        const { box, dpr, cx, cy, pixelScale, align } = metrics as any;
         // 清空 overlay（以设备像素为单位）
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, box.width, box.height);
@@ -233,9 +233,12 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 const coords = index.get(hexFull)!;
                 for (let i = 0; i < coords.length; i++) {
                     const p = coords[i];
-                    const px = Math.round(cx + p.x * pixelScale);
-                    const py = Math.round(cy + p.y * pixelScale);
-                    ctx.fillRect(px, py, Math.ceil(pixelScale), Math.ceil(pixelScale));
+                    // align to device-pixel grid to avoid sub-pixel jitter when scaling
+                    const px = Math.round((cx + p.x * pixelScale) / align) * align;
+                    const py = Math.round((cy + p.y * pixelScale) / align) * align;
+                    const pw = Math.max(align, Math.round(pixelScale / align) * align);
+                    const ph = pw;
+                    ctx.fillRect(px, py, pw, ph);
                 }
             } else {
                 // fallback: 遍历像素数据
@@ -264,9 +267,11 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                             const b = imgData[idx + 2];
                             const hhex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
                             if (hhex === hexFull) {
-                                const px = Math.round(cx + (sx + xx) * pixelScale);
-                                const py = Math.round(cy + (sy + yy) * pixelScale);
-                                ctx.fillRect(px, py, Math.ceil(pixelScale), Math.ceil(pixelScale));
+                                // align to device pixel grid
+                                const px = Math.round((cx + (sx + xx) * pixelScale) / align) * align;
+                                const py = Math.round((cy + (sy + yy) * pixelScale) / align) * align;
+                                const pw = Math.max(align, Math.round(pixelScale / align) * align);
+                                ctx.fillRect(px, py, pw, pw);
                             }
                         }
                     }
