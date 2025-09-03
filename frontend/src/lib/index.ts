@@ -1,2 +1,2 @@
-export { PaletteProvider, usePaletteStore } from "./store.tsx";
-export type { PaletteColor, PaletteData, GeneratedPalette } from "./store.tsx";
+// removed: palette store exports (features trimmed)
+// removed file
