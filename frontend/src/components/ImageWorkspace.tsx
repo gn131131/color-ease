@@ -204,6 +204,29 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         setScale((cur) => (cur < s ? s : cur));
         viewState.current.x = 0;
         viewState.current.y = 0;
+        // 如果切换图片时存在正在框选或已固定的选区，应当取消选区并清理相关缓存/hover状态
+        selectingRef.current = false;
+        possibleSelectionRef.current = null;
+        // 使用 updateSelection 保证 selectionRef.current 能同步更新
+        try {
+            updateSelection({ start: null, end: null, colors: [] });
+        } catch (err) {
+            // fallback to setSelection if updateSelection unavailable for some reason
+            setSelection({ start: null, end: null, colors: [] });
+            selectionRef.current = { start: null, end: null, colors: [] };
+        }
+        selectionColorIndexRef.current = null;
+        hoverPixelRef.current = null;
+        setHoverInfo(null);
+        setSelectionHoverHex(null);
+        possibleSelectionRef.current = null;
+        // redraw to ensure UI reflects cleared selection
+        setTimeout(() => {
+            try {
+                draw();
+                requestAnimationFrame(() => drawOverlay());
+            } catch (err) {}
+        }, 0);
     }, [activeImage, computeMinScale]);
 
     // overlay 绘制：在 overlay canvas 上高亮选区内的匹配像素（使用缓存索引）
@@ -842,66 +865,81 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         // update hover pixel for picker
         if (tool === "picker") {
             const posHover = toImageCoord(e.clientX, e.clientY);
-            if (posHover) {
-                const hx = Math.floor(posHover.x);
-                const hy = Math.floor(posHover.y);
-                // only trigger draw if changed
-                const prev = hoverPixelRef.current;
-                if (!prev || prev.x !== hx || prev.y !== hy) {
-                    hoverPixelRef.current = { x: hx, y: hy };
+            // If user is actively making a selection (dragging to select), suppress hover/pixel highlighting
+            if (selectingRef.current) {
+                if (hoverPixelRef.current) {
+                    hoverPixelRef.current = null;
                     draw();
                 }
-                // 如果当前正在框选或已有固定选区，则不显示悬浮信息框（按要求2）
-                if (!selectingRef.current && !(selectionRef.current && selectionRef.current.start)) {
-                    // hover 信息框：采样颜色
-                    const hex = sampleHexAt(hx, hy);
-                    let rgb = "";
-                    if (hex && hex.length === 7) {
-                        const r = parseInt(hex.slice(1, 3), 16);
-                        const g = parseInt(hex.slice(3, 5), 16);
-                        const b = parseInt(hex.slice(5, 7), 16);
-                        rgb = `rgb(${r}, ${g}, ${b})`;
+                setHoverInfo(null);
+                setSelectionHoverHex(null);
+                // don't sample or update overlays while selecting
+            } else {
+                if (posHover) {
+                    const hx = Math.floor(posHover.x);
+                    const hy = Math.floor(posHover.y);
+                    // only trigger draw if changed
+                    const prev = hoverPixelRef.current;
+                    if (!prev || prev.x !== hx || prev.y !== hy) {
+                        hoverPixelRef.current = { x: hx, y: hy };
+                        draw();
                     }
-                    // 将 hover 坐标限制在可见区域：相对于窗口或 container
-                    const containerBox = containerRef.current?.getBoundingClientRect();
-                    const vw = window.innerWidth;
-                    const vh = window.innerHeight;
-                    let hxClient = e.clientX + 16;
-                    let hyClient = e.clientY + 16;
-                    const boxW = 140; // 估算 hover 框宽度
-                    const boxH = 64; // 估算 hover 框高度
-                    const maxX = (containerBox ? Math.min(vw, containerBox.right) : vw) - 8;
-                    const minX = containerBox ? Math.max(8, containerBox.left) : 8;
-                    const maxY = (containerBox ? Math.min(vh, containerBox.bottom) : vh) - 8;
-                    const minY = containerBox ? Math.max(8, containerBox.top) : 8;
-                    if (hxClient + boxW > maxX) hxClient = Math.max(minX, e.clientX - boxW - 16);
-                    if (hyClient + boxH > maxY) hyClient = Math.max(minY, e.clientY - boxH - 16);
+                    // 如果当前没有正在框选且也没有固定选区，显示悬浮信息框
+                    if (!(selectionRef.current && selectionRef.current.start)) {
+                        // hover 信息框：采样颜色
+                        const hex = sampleHexAt(hx, hy);
+                        let rgb = "";
+                        if (hex && hex.length === 7) {
+                            const r = parseInt(hex.slice(1, 3), 16);
+                            const g = parseInt(hex.slice(3, 5), 16);
+                            const b = parseInt(hex.slice(5, 7), 16);
+                            rgb = `rgb(${r}, ${g}, ${b})`;
+                        }
+                        // 将 hover 坐标限制在可见区域：相对于窗口或 container
+                        const containerBox = containerRef.current?.getBoundingClientRect();
+                        const vw = window.innerWidth;
+                        const vh = window.innerHeight;
+                        let hxClient = e.clientX + 16;
+                        let hyClient = e.clientY + 16;
+                        const boxW = 140; // 估算 hover 框宽度
+                        const boxH = 64; // 估算 hover 框高度
+                        const maxX = (containerBox ? Math.min(vw, containerBox.right) : vw) - 8;
+                        const minX = containerBox ? Math.max(8, containerBox.left) : 8;
+                        const maxY = (containerBox ? Math.min(vh, containerBox.bottom) : vh) - 8;
+                        const minY = containerBox ? Math.max(8, containerBox.top) : 8;
+                        if (hxClient + boxW > maxX) hxClient = Math.max(minX, e.clientX - boxW - 16);
+                        if (hyClient + boxH > maxY) hyClient = Math.max(minY, e.clientY - boxH - 16);
 
-                    setHoverInfo({
-                        visible: true,
-                        x: hxClient,
-                        y: hyClient,
-                        hex: hex || "",
-                        rgb
-                    });
-                } else {
-                    setHoverInfo(null);
-                }
-                // if there is a selection, and the hover pixel is inside it, sample and set selection hover hex
-                const sel = selectionRef.current;
-                if (sel.start && sel.end) {
-                    const sx = Math.min(sel.start.x, sel.end.x);
-                    const sy = Math.min(sel.start.y, sel.end.y);
-                    const ex = Math.max(sel.start.x, sel.end.x);
-                    const ey = Math.max(sel.start.y, sel.end.y);
-                    if (hx >= sx && hx <= ex && hy >= sy && hy <= ey) {
-                        const sample = sampleHexAt(hx, hy);
-                        const sampleU = sample ? sample.toUpperCase() : null;
-                        // 样本采样调试日志已移除
-                        setSelectionHoverHex(sampleU);
-                        try {
-                            requestAnimationFrame(() => drawOverlay());
-                        } catch (err) {}
+                        setHoverInfo({
+                            visible: true,
+                            x: hxClient,
+                            y: hyClient,
+                            hex: hex || "",
+                            rgb
+                        });
+                    } else {
+                        setHoverInfo(null);
+                    }
+                    // if there is a fixed selection, and the hover pixel is inside it, sample and set selection hover hex
+                    const sel = selectionRef.current;
+                    if (sel.start && sel.end) {
+                        const sx = Math.min(sel.start.x, sel.end.x);
+                        const sy = Math.min(sel.start.y, sel.end.y);
+                        const ex = Math.max(sel.start.x, sel.end.x);
+                        const ey = Math.max(sel.start.y, sel.end.y);
+                        if (hx >= sx && hx <= ex && hy >= sy && hy <= ey) {
+                            const sample = sampleHexAt(hx, hy);
+                            const sampleU = sample ? sample.toUpperCase() : null;
+                            setSelectionHoverHex(sampleU);
+                            try {
+                                requestAnimationFrame(() => drawOverlay());
+                            } catch (err) {}
+                        } else {
+                            setSelectionHoverHex(null);
+                            try {
+                                requestAnimationFrame(() => drawOverlay());
+                            } catch (err) {}
+                        }
                     } else {
                         setSelectionHoverHex(null);
                         try {
@@ -909,17 +947,12 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         } catch (err) {}
                     }
                 } else {
-                    setSelectionHoverHex(null);
-                    try {
-                        requestAnimationFrame(() => drawOverlay());
-                    } catch (err) {}
+                    if (hoverPixelRef.current) {
+                        hoverPixelRef.current = null;
+                        draw();
+                    }
+                    setHoverInfo(null);
                 }
-            } else {
-                if (hoverPixelRef.current) {
-                    hoverPixelRef.current = null;
-                    draw();
-                }
-                setHoverInfo(null);
             }
         }
         if (viewState.current.dragging) {
