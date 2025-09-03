@@ -38,7 +38,9 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const infoPanelRef = useRef<HTMLDivElement | null>(null);
     const selectionListRef = useRef<HTMLDivElement | null>(null);
+    const [selectionHoverHex, setSelectionHoverHex] = useState<string | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const overlayRef = useRef<HTMLCanvasElement | null>(null);
     const offscreenRef = useRef<HTMLCanvasElement | null>(null);
     const viewState = useRef({ x: 0, y: 0, dragging: false, lastX: 0, lastY: 0 });
     const isInteractingRef = useRef(false);
@@ -50,6 +52,9 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const [infoPanelPosition, setInfoPanelPosition] = useState<"top" | "bottom">("top");
     const [isDragging, setIsDragging] = useState(false);
     const hoverPixelRef = useRef<{ x: number; y: number } | null>(null);
+    // 新增：hover 信息框
+    const [hoverInfo, setHoverInfo] = useState<{ visible: boolean; x: number; y: number; hex: string; rgb: string } | null>(null);
+    const hoverBoxRef = useRef<HTMLDivElement | null>(null);
     // 框选相关
     const selectingRef = useRef(false);
     const possibleSelectionRef = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
@@ -59,11 +64,26 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         colors: Array<{ hex: string; count: number }>;
     }>({ start: null, end: null, colors: [] });
     const selectionRef = useRef(selection);
+    // 缓存：选区内每种颜色对应的像素坐标列表（用于快速高亮）
+    const selectionColorIndexRef = useRef<Map<string, Array<{ x: number; y: number }>> | null>(null);
+    // 虚拟列表参数
+    const ITEM_HEIGHT = 40; // 单个 color-item 的固定高度（px）
+    const OVERSCAN = 6;
+    const [listScrollTop, setListScrollTop] = useState(0);
+    const [listClientHeight, setListClientHeight] = useState(0);
 
     const updateSelection = (v: typeof selection | ((s: typeof selection) => typeof selection)) => {
         setSelection((prev) => {
-            const next = typeof v === "function" ? (v as any)(prev) : v;
+            let next = typeof v === "function" ? (v as any)(prev) : v;
+            // normalize any provided colors to uppercase hex for reliable matching
+            if (next && Array.isArray((next as any).colors)) {
+                next = { ...next, colors: (next as any).colors.map((c: any) => ({ ...c, hex: String(c.hex).toUpperCase() })) };
+            }
             selectionRef.current = next;
+            // If selection cleared, drop cached index
+            if (!next.start) {
+                selectionColorIndexRef.current = null;
+            }
             return next;
         });
     };
@@ -178,6 +198,78 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         viewState.current.y = 0;
     }, [activeImage, computeMinScale]);
 
+    // overlay 绘制：在 overlay canvas 上高亮选区内的匹配像素（使用缓存索引）
+    const drawOverlay = useCallback(() => {
+        const ov = overlayRef.current;
+        if (!ov) return;
+        const ctx = ov.getContext("2d");
+        if (!ctx) return;
+        const metrics = computeImageMetrics();
+        if (!metrics) return;
+        const { box, dpr, cx, cy, pixelScale } = metrics as any;
+        // 清空 overlay（以设备像素为单位）
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, box.width, box.height);
+
+        const sel = selectionRef.current;
+        if (!sel.start || !sel.end) return;
+        if (!selectionHoverHex) return;
+        if (!activeImage) return;
+
+        try {
+            const hexFull = selectionHoverHex.toUpperCase();
+            const index = selectionColorIndexRef.current;
+            ctx.save();
+            ctx.fillStyle = "rgba(255,255,0,0.24)";
+            if (index && index.has(hexFull)) {
+                const coords = index.get(hexFull)!;
+                for (let i = 0; i < coords.length; i++) {
+                    const p = coords[i];
+                    const px = Math.round(cx + p.x * pixelScale);
+                    const py = Math.round(cy + p.y * pixelScale);
+                    ctx.fillRect(px, py, Math.ceil(pixelScale), Math.ceil(pixelScale));
+                }
+            } else {
+                // fallback: 遍历像素数据
+                const s = sel.start!;
+                const e2 = sel.end!;
+                const sx = Math.min(s.x, e2.x);
+                const sy = Math.min(s.y, e2.y);
+                const ex = Math.max(s.x, e2.x);
+                const ey = Math.max(s.y, e2.y);
+                const w = ex - sx + 1;
+                const h = ey - sy + 1;
+                if (w > 0 && h > 0) {
+                    const off = offscreenRef.current!;
+                    off.width = activeImage.width;
+                    off.height = activeImage.height;
+                    const octx = off.getContext("2d")!;
+                    octx.drawImage(activeImage.img, 0, 0);
+                    const imgData = octx.getImageData(sx, sy, w, h).data;
+                    for (let yy = 0; yy < h; yy++) {
+                        for (let xx = 0; xx < w; xx++) {
+                            const idx = (yy * w + xx) * 4;
+                            const a = imgData[idx + 3];
+                            if (a === 0) continue;
+                            const r = imgData[idx];
+                            const g = imgData[idx + 1];
+                            const b = imgData[idx + 2];
+                            const hhex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
+                            if (hhex === hexFull) {
+                                const px = Math.round(cx + (sx + xx) * pixelScale);
+                                const py = Math.round(cy + (sy + yy) * pixelScale);
+                                ctx.fillRect(px, py, Math.ceil(pixelScale), Math.ceil(pixelScale));
+                            }
+                        }
+                    }
+                }
+            }
+            ctx.restore();
+        } catch (err) {
+            console.error("overlay highlight failed", err);
+        }
+    }, [selectionHoverHex, activeImage]);
+
     // 绘制
     const draw = useCallback(() => {
         const canvas = canvasRef.current;
@@ -223,22 +315,20 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             ctx.restore();
         }
 
-        // 当为取色工具时，绘制 hover 高亮框（微弱边框，便于看到目标像素）
-        // 仅在像素网格可见（达到 GRID_SHOW_SCALE）时显示 hover，保持行为与网格一致
+        // 高亮像素 hover 框：增强填充和边框，更明显
         if (pixelScale >= GRID_SHOW_SCALE && tool === "picker" && hoverPixelRef.current) {
             const p = hoverPixelRef.current;
-            // 使用像素边缘进行映射
             const toScreen = (ix: number, iy: number) => ({ sx: cx + ix * pixelScale, sy: cy + iy * pixelScale });
             const sp = toScreen(p.x, p.y);
             ctx.save();
-            // 轻微的白色半透明填充与细边框
-            ctx.fillStyle = "rgba(255,255,255,0.06)";
-            ctx.strokeStyle = "rgba(255,255,255,0.9)";
-            // 边框线宽根据 dpr 调整以保持细微
-            ctx.lineWidth = Math.max(1 / dpr, 0.8);
-            // 绘制填充与边框
+            // 更明显的高亮：亮黄色半透明填充+加粗蓝色边框+阴影
+            ctx.fillStyle = "rgba(255,255,0,0.25)";
+            ctx.strokeStyle = "#00aaff";
+            ctx.lineWidth = Math.max(2 / dpr, 2);
+            ctx.shadowColor = "#00aaff";
+            ctx.shadowBlur = 6;
             ctx.fillRect(sp.sx, sp.sy, pixelScale, pixelScale);
-            ctx.strokeRect(sp.sx + 0.5 * ctx.lineWidth, sp.sy + 0.5 * ctx.lineWidth, Math.max(0, pixelScale - ctx.lineWidth), Math.max(0, pixelScale - ctx.lineWidth));
+            ctx.strokeRect(sp.sx, sp.sy, pixelScale, pixelScale);
             ctx.restore();
         }
 
@@ -329,7 +419,13 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             ctx.lineWidth = Math.max(2 / dpr, 1.5);
             ctx.strokeRect(left + 0.5 * ctx.lineWidth, top + 0.5 * ctx.lineWidth, Math.max(0, w - ctx.lineWidth), Math.max(0, h - ctx.lineWidth));
             ctx.restore();
+
+            // 高亮已迁移到 overlay canvas（drawOverlay）以避免频繁重绘主画布。
         }
+        // 尝试同步 overlay（如果存在）以保持高亮覆盖最新视图
+        try {
+            drawOverlay();
+        } catch (err) {}
     }, [activeImage, scale, measure]);
 
     // 调整画布尺寸
@@ -346,6 +442,16 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         const ctx = canvas.getContext("2d");
         if (ctx) {
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 逻辑像素
+        }
+        // sync overlay size
+        const ov = overlayRef.current;
+        if (ov && box) {
+            ov.width = box.width * dpr;
+            ov.height = box.height * dpr;
+            ov.style.width = box.width + "px";
+            ov.style.height = box.height + "px";
+            const octx = ov.getContext("2d");
+            if (octx) octx.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
         draw();
     }, [draw]);
@@ -372,6 +478,13 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         draw();
     }, [draw]);
 
+    // 当 hover hex 或选区/图片变化时重绘 overlay
+    useEffect(() => {
+        try {
+            drawOverlay();
+        } catch (err) {}
+    }, [drawOverlay, selectionHoverHex, selection.colors, activeImage]);
+
     // 动态计算选区颜色列表的最大高度，确保不超过预览面板可见高度（减去 info-panel 的上下间距）
     useEffect(() => {
         const updateMax = () => {
@@ -385,6 +498,8 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             // 可用高度 = 容器高度 - topGap - bottomGap(topGap) = container.height - 2*topGap
             const available = Math.max(80, Math.round(containerBox.height - 2 * topGap));
             list.style.maxHeight = available + "px";
+            // 更新虚拟列表高度
+            setListClientHeight(list.clientHeight);
         };
 
         // 使用 ResizeObserver 监听容器 / 面板 / 列表 的尺寸变化，配合 window resize 做快速响应
@@ -402,6 +517,64 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             window.removeEventListener("resize", onWin);
         };
     }, [selection.colors, infoPanelPosition]);
+
+    // 监听 selectionList 的滚动以更新 scrollTop 状态
+    useEffect(() => {
+        const list = selectionListRef.current;
+        if (!list) return;
+        const onScroll = () => setListScrollTop(list.scrollTop);
+        list.addEventListener("scroll", onScroll);
+        // initial
+        setListScrollTop(list.scrollTop);
+        setListClientHeight(list.clientHeight);
+        return () => list.removeEventListener("scroll", onScroll);
+    }, [selection.colors]);
+
+    // 当 selectionHoverHex 变化时，尝试将对应列表项滚动到可见位置
+    useEffect(() => {
+        if (!selectionHoverHex) return;
+        const list = selectionListRef.current;
+        if (!list) return;
+        // 找到索引并滚动到可见位置
+        const idx = selection.colors.findIndex((c) => c.hex.toUpperCase() === selectionHoverHex.toUpperCase());
+        if (idx >= 0) {
+            const targetTop = idx * ITEM_HEIGHT;
+            const targetBottom = targetTop + ITEM_HEIGHT;
+            if (targetTop < list.scrollTop) {
+                list.scrollTo({ top: targetTop, behavior: "smooth" });
+            } else if (targetBottom > list.scrollTop + list.clientHeight) {
+                list.scrollTo({ top: targetBottom - list.clientHeight, behavior: "smooth" });
+            }
+        }
+    }, [selectionHoverHex]);
+
+    // 当 hoverInfo 更新时，动态测量 hover box 的尺寸并夹取位置到可见区域（使用 layout effect 保证同步）
+    React.useLayoutEffect(() => {
+        if (!hoverInfo || !hoverInfo.visible) return;
+        const box = hoverBoxRef.current;
+        if (!box) return;
+        const rect = box.getBoundingClientRect();
+        const containerBox = containerRef.current?.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const margin = 8;
+        // 目标位置来自 hoverInfo.x/y 已经包含 offset
+        let left = hoverInfo.x;
+        let top = hoverInfo.y;
+        const maxRight = containerBox ? Math.min(vw, containerBox.right) - margin : vw - margin;
+        const minLeft = containerBox ? Math.max(margin, containerBox.left) : margin;
+        const maxBottom = containerBox ? Math.min(vh, containerBox.bottom) - margin : vh - margin;
+        const minTop = containerBox ? Math.max(margin, containerBox.top) : margin;
+        if (left + rect.width > maxRight) {
+            left = Math.max(minLeft, hoverInfo.x - rect.width - 24);
+        }
+        if (top + rect.height > maxBottom) {
+            top = Math.max(minTop, hoverInfo.y - rect.height - 24);
+        }
+        // apply to element (left/top are fixed coordinates)
+        box.style.left = `${left}px`;
+        box.style.top = `${top}px`;
+    }, [hoverInfo]);
 
     // 当切换工具：如果离开量测工具，清空画板上的测量线与提示
     useEffect(() => {
@@ -668,9 +841,77 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                     hoverPixelRef.current = { x: hx, y: hy };
                     draw();
                 }
-            } else if (hoverPixelRef.current) {
-                hoverPixelRef.current = null;
-                draw();
+                // 如果当前正在框选或已有固定选区，则不显示悬浮信息框（按要求2）
+                if (!selectingRef.current && !(selectionRef.current && selectionRef.current.start)) {
+                    // hover 信息框：采样颜色
+                    const hex = sampleHexAt(hx, hy);
+                    let rgb = "";
+                    if (hex && hex.length === 7) {
+                        const r = parseInt(hex.slice(1, 3), 16);
+                        const g = parseInt(hex.slice(3, 5), 16);
+                        const b = parseInt(hex.slice(5, 7), 16);
+                        rgb = `rgb(${r}, ${g}, ${b})`;
+                    }
+                    // 将 hover 坐标限制在可见区域：相对于窗口或 container
+                    const containerBox = containerRef.current?.getBoundingClientRect();
+                    const vw = window.innerWidth;
+                    const vh = window.innerHeight;
+                    let hxClient = e.clientX + 16;
+                    let hyClient = e.clientY + 16;
+                    const boxW = 140; // 估算 hover 框宽度
+                    const boxH = 64; // 估算 hover 框高度
+                    const maxX = (containerBox ? Math.min(vw, containerBox.right) : vw) - 8;
+                    const minX = containerBox ? Math.max(8, containerBox.left) : 8;
+                    const maxY = (containerBox ? Math.min(vh, containerBox.bottom) : vh) - 8;
+                    const minY = containerBox ? Math.max(8, containerBox.top) : 8;
+                    if (hxClient + boxW > maxX) hxClient = Math.max(minX, e.clientX - boxW - 16);
+                    if (hyClient + boxH > maxY) hyClient = Math.max(minY, e.clientY - boxH - 16);
+
+                    setHoverInfo({
+                        visible: true,
+                        x: hxClient,
+                        y: hyClient,
+                        hex: hex || "",
+                        rgb
+                    });
+                } else {
+                    setHoverInfo(null);
+                }
+                // if there is a selection, and the hover pixel is inside it, sample and set selection hover hex
+                const sel = selectionRef.current;
+                if (sel.start && sel.end) {
+                    const sx = Math.min(sel.start.x, sel.end.x);
+                    const sy = Math.min(sel.start.y, sel.end.y);
+                    const ex = Math.max(sel.start.x, sel.end.x);
+                    const ey = Math.max(sel.start.y, sel.end.y);
+                    if (hx >= sx && hx <= ex && hy >= sy && hy <= ey) {
+                        const sample = sampleHexAt(hx, hy);
+                        const sampleU = sample ? sample.toUpperCase() : null;
+                        if (debugRef.current) {
+                            console.debug("sample inside selection:", { hx, hy, sampleU, selectionColors: selectionRef.current?.colors?.map((c) => c.hex) });
+                        }
+                        setSelectionHoverHex(sampleU);
+                        try {
+                            requestAnimationFrame(() => drawOverlay());
+                        } catch (err) {}
+                    } else {
+                        setSelectionHoverHex(null);
+                        try {
+                            requestAnimationFrame(() => drawOverlay());
+                        } catch (err) {}
+                    }
+                } else {
+                    setSelectionHoverHex(null);
+                    try {
+                        requestAnimationFrame(() => drawOverlay());
+                    } catch (err) {}
+                }
+            } else {
+                if (hoverPixelRef.current) {
+                    hoverPixelRef.current = null;
+                    draw();
+                }
+                setHoverInfo(null);
             }
         }
         if (viewState.current.dragging) {
@@ -766,24 +1007,32 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         // clear shift/snapping when pointer released
         shiftPressedRef.current = false;
         snappingRef.current = { active: false, axis: null };
-        // 如果存在 possibleSelectionRef 且未发生拖拽（selectingRef 未被触发），视为单击：取色并复制
+        // 如果存在 possibleSelectionRef 且未发生拖拽（selectingRef 未被触发），视为单击：仅在左键（button === 0）时取色并复制
         if (!selectingRef.current && possibleSelectionRef.current && tool === "picker") {
             const p = possibleSelectionRef.current;
+            // clear possibleSelectionRef regardless of button to avoid stale state
             possibleSelectionRef.current = null;
-            const hex = pickColorAt(p.x, p.y);
-            if (hex) {
-                const text = formatColor(hex);
-                try {
-                    navigator.clipboard
-                        .writeText(text)
-                        .then(() => {
-                            toast.show("已复制");
-                        })
-                        .catch(() => {
-                            toast.show("复制失败");
-                        });
-                } catch (err) {
-                    toast.show("复制失败");
+            // only handle left-button clicks for copying (prevent right-click from copying)
+            // PointerEvent.button: 0 = primary/left, 1 = middle, 2 = secondary/right
+            // @ts-ignore - React's PointerEvent typing includes button, but keep safe
+            if ((e as any).button !== 0) {
+                // do not copy on non-left buttons
+            } else {
+                const hex = pickColorAt(p.x, p.y);
+                if (hex) {
+                    const text = formatColor(hex);
+                    try {
+                        navigator.clipboard
+                            .writeText(text)
+                            .then(() => {
+                                toast.show("已复制");
+                            })
+                            .catch(() => {
+                                toast.show("复制失败");
+                            });
+                    } catch (err) {
+                        toast.show("复制失败");
+                    }
                 }
             }
         }
@@ -799,12 +1048,16 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 if (activeImage && selectionRef.current.start) {
                     const stats = pickColorsInSelection(selectionRef.current.start!, end!);
                     updateSelection((s) => ({ ...s, colors: stats }));
+                    // 构建颜色到坐标索引以便后续高亮使用
+                    buildColorIndexInSelection(selectionRef.current.start!, end!);
                     draw();
                 }
             }, 0);
         }
         // 隐藏测量浮动提示（测量结束或取消）
         setMeasureTip((t) => ({ ...t, visible: false }));
+        // clear selection hover highlight
+        setSelectionHoverHex(null);
     };
 
     const handleContextMenu: React.MouseEventHandler<HTMLCanvasElement> = (e) => {
@@ -846,6 +1099,21 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         return hexU;
     };
 
+    // 仅采样颜色，不改变全局 color
+    const sampleHexAt = (ix: number, iy: number) => {
+        if (!activeImage) return null;
+        const off = offscreenRef.current!;
+        off.width = activeImage.width;
+        off.height = activeImage.height;
+        const octx = off.getContext("2d")!;
+        octx.drawImage(activeImage.img, 0, 0);
+        const data = octx.getImageData(Math.floor(ix), Math.floor(iy), 1, 1).data;
+        const a = data[3];
+        if (a === 0) return null;
+        const hex = "#" + [data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
+        return hex.toUpperCase();
+    };
+
     // 统计选区内不重复颜色（排除 alpha === 0），返回按 count 降序的数组
     const pickColorsInSelection = (start: { x: number; y: number }, end: { x: number; y: number }) => {
         if (!activeImage) return [] as Array<{ hex: string; count: number }>;
@@ -880,6 +1148,42 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         const arr = Array.from(map.entries()).map(([hex, count]) => ({ hex, count }));
         arr.sort((a, b) => b.count - a.count);
         return arr;
+    };
+
+    // 构建选区内颜色到坐标列表的索引，用于快速高亮（在选区固定后构建一次）
+    const buildColorIndexInSelection = (start: { x: number; y: number }, end: { x: number; y: number }) => {
+        if (!activeImage) return;
+        const sx = Math.max(0, Math.min(start.x, end.x));
+        const sy = Math.max(0, Math.min(start.y, end.y));
+        const ex = Math.min(activeImage.width - 1, Math.max(start.x, end.x));
+        const ey = Math.min(activeImage.height - 1, Math.max(start.y, end.y));
+        const w = ex - sx + 1;
+        const h = ey - sy + 1;
+        if (w <= 0 || h <= 0) {
+            selectionColorIndexRef.current = null;
+            return;
+        }
+        const off = offscreenRef.current!;
+        off.width = activeImage.width;
+        off.height = activeImage.height;
+        const octx = off.getContext("2d")!;
+        octx.drawImage(activeImage.img, 0, 0);
+        const imgData = octx.getImageData(sx, sy, w, h).data;
+        const map = new Map<string, Array<{ x: number; y: number }>>();
+        for (let yy = 0; yy < h; yy++) {
+            for (let xx = 0; xx < w; xx++) {
+                const idx = (yy * w + xx) * 4;
+                const a = imgData[idx + 3];
+                if (a === 0) continue;
+                const r = imgData[idx];
+                const g = imgData[idx + 1];
+                const b = imgData[idx + 2];
+                const hex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
+                if (!map.has(hex)) map.set(hex, []);
+                map.get(hex)!.push({ x: sx + xx, y: sy + yy });
+            }
+        }
+        selectionColorIndexRef.current = map;
     };
 
     const handleFileInput: React.ChangeEventHandler<HTMLInputElement> = (e) => {
@@ -962,64 +1266,109 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                             hoverPixelRef.current = null;
                             draw();
                         }
+                        setHoverInfo(null);
+                        setSelectionHoverHex(null);
+                        try {
+                            requestAnimationFrame(() => drawOverlay());
+                        } catch (err) {}
                     }}
                     onContextMenu={handleContextMenu}
                 />
 
+                {/* overlay canvas：用于绘制高亮，不影响主画布 */}
+                <canvas ref={overlayRef} className="canvas-overlay" style={{ pointerEvents: "none", position: "absolute", left: 0, top: 0 }} />
+
                 <div
                     ref={infoPanelRef}
-                    className={`info-panel ${infoPanelPosition}`}
+                    // 当有固定选区时强制使用 top 类，避免 .bottom 的 bottom:16px 与 inline top 同时生效
+                    className={`info-panel ${selectionRef.current && selectionRef.current.start ? "top" : infoPanelPosition}`}
+                    // 当存在固定选区时，强制固定到右上角并禁止切换位置
+                    style={selectionRef.current && selectionRef.current.start ? { position: "absolute", right: 12, top: 12, minHeight: 80 } : undefined}
                     onMouseEnter={() => {
-                        // 无选区时，鼠标移入切换位置（恢复之前行为）
                         if (!selectionRef.current || !selectionRef.current.start) {
                             setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"));
                         }
                     }}
                     onClick={() => {
-                        // 点击也允许切换（但若存在选区则不切换）
                         if (selectionRef.current && selectionRef.current.start) return;
                         setInfoPanelPosition((p) => (p === "top" ? "bottom" : "top"));
                     }}
                 >
                     <div className="info-content">
-                        <div className="info-line small">取色：{formatColor(color)}</div>
+                        {/* 单色取色信息已移除：信息面板专注于选区统计与测距提示 */}
                         {/* 测距的数值改为随鼠标浮动提示，不在信息面板展示 */}
                         <div className="info-line small measure-hint">{status}</div>
                         {/* 框选颜色统计 */}
                         {selection.colors && selection.colors.length > 0 && (
                             <div className="info-line small selection-colors">
                                 <div style={{ fontSize: 12, marginBottom: 6 }}>选区颜色（按像素数）:</div>
-                                <div ref={selectionListRef} className="selection-colors-list color-list" role="list" aria-label="选区颜色" style={{ paddingRight: 6 }}>
-                                    {selection.colors.slice(0, 20).map((c) => (
-                                        <div
-                                            key={c.hex}
-                                            role="listitem"
-                                            tabIndex={0}
-                                            className="color-item"
-                                            onClick={() => {
-                                                try {
-                                                    const txt = formatColor(c.hex);
-                                                    navigator.clipboard.writeText(txt).then(() => toast.show("已复制"));
-                                                } catch (err) {
-                                                    toast.show("复制失败");
-                                                }
-                                            }}
-                                            onKeyDown={(ev) => {
-                                                if (ev.key === "Enter" || ev.key === " ") {
-                                                    try {
-                                                        const txt = formatColor(c.hex);
-                                                        navigator.clipboard.writeText(txt).then(() => toast.show("已复制"));
-                                                    } catch (err) {
-                                                        toast.show("复制失败");
-                                                    }
-                                                }
-                                            }}
-                                        >
-                                            <div className="color-swatch" style={{ background: c.hex }} />
-                                            <div className="color-hex">{formatColor(c.hex)}</div>
-                                            <div className="color-count">{c.count}</div>
-                                        </div>
-                                    ))}
+                                <div
+                                    ref={selectionListRef}
+                                    className="selection-colors-list color-list"
+                                    role="list"
+                                    aria-label="选区颜色"
+                                    style={{ paddingRight: 6, position: "relative", overflowY: "auto" }}
+                                >
+                                    {/* spacer 用于设置滚动高度 */}
+                                    <div style={{ height: selection.colors.length * ITEM_HEIGHT }} />
+                                    {/* 计算可见项索引 */}
+                                    {(() => {
+                                        const total = selection.colors.length;
+                                        const startIndex = Math.max(0, Math.floor(listScrollTop / ITEM_HEIGHT) - OVERSCAN);
+                                        const endIndex = Math.min(total - 1, Math.ceil((listScrollTop + listClientHeight) / ITEM_HEIGHT) + OVERSCAN);
+                                        const items = [] as JSX.Element[];
+                                        for (let i = startIndex; i <= endIndex; i++) {
+                                            const c = selection.colors[i];
+                                            const isHighlighted = selectionHoverHex && selectionHoverHex === c.hex.toUpperCase();
+                                            items.push(
+                                                <div
+                                                    key={c.hex + "_" + i}
+                                                    role="listitem"
+                                                    tabIndex={0}
+                                                    data-hex={c.hex}
+                                                    className={`color-item ${isHighlighted ? "highlighted" : ""}`}
+                                                    onMouseEnter={() => {
+                                                        setSelectionHoverHex(c.hex.toUpperCase());
+                                                        try {
+                                                            requestAnimationFrame(() => drawOverlay());
+                                                        } catch (err) {}
+                                                    }}
+                                                    onMouseLeave={() => {
+                                                        setSelectionHoverHex(null);
+                                                        try {
+                                                            requestAnimationFrame(() => drawOverlay());
+                                                        } catch (err) {}
+                                                    }}
+                                                    onClick={() => {
+                                                        try {
+                                                            const txt = formatColor(c.hex);
+                                                            navigator.clipboard.writeText(txt).then(() => toast.show("已复制"));
+                                                        } catch (err) {
+                                                            toast.show("复制失败");
+                                                        }
+                                                    }}
+                                                    onKeyDown={(ev) => {
+                                                        if (ev.key === "Enter" || ev.key === " ") {
+                                                            try {
+                                                                const txt = formatColor(c.hex);
+                                                                navigator.clipboard.writeText(txt).then(() => toast.show("已复制"));
+                                                            } catch (err) {
+                                                                toast.show("复制失败");
+                                                            }
+                                                        }
+                                                    }}
+                                                    style={{ position: "absolute", top: i * ITEM_HEIGHT, left: 0, right: 0, height: ITEM_HEIGHT }}
+                                                >
+                                                    <div className="color-swatch" style={{ background: c.hex }} />
+                                                    <div className="color-hex">{formatColor(c.hex)}</div>
+                                                    <div className="color-count" style={{ marginLeft: "auto" }}>
+                                                        {c.count}
+                                                    </div>
+                                                </div>
+                                            );
+                                        }
+                                        return items;
+                                    })()}
                                 </div>
                             </div>
                         )}
@@ -1029,6 +1378,16 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                 <div className="measure-tip" style={{ display: measureTip.visible ? "block" : "none", left: measureTip.x + 12, top: measureTip.y + 12 }} aria-hidden={!measureTip.visible}>
                     {measureTip.text}
                 </div>
+                {/* 像素 hover 信息框 */}
+                {hoverInfo && hoverInfo.visible && hoverInfo.hex && (
+                    <div ref={hoverBoxRef} className="pixel-hover-info" style={{ left: hoverInfo.x, top: hoverInfo.y }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span className="swatch" style={{ background: hoverInfo.hex }} />
+                            <span className="value">{colorMode === "hex" ? hoverInfo.hex : hoverInfo.rgb}</span>
+                        </div>
+                        <div className="meta">点击像素可复制颜色</div>
+                    </div>
+                )}
                 {/* 复制提示已改为全局 Toast 管理 */}
             </div>
         </div>

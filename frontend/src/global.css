@@ -306,6 +306,17 @@ a {
     position: relative;
     width: 64px;
     display: inline-block;
+    .color-item.highlighted {
+        background: rgba(0, 180, 255, 0.22) !important;
+        box-shadow: 0 18px 40px rgba(0, 180, 255, 0.18) !important;
+        border-color: rgba(0, 180, 255, 0.32) !important;
+        transform: translateY(-2px);
+    }
+    .color-item.highlighted .color-hex {
+        color: #ffffff !important;
+        font-weight: 700;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+    }
 }
 .thumb-wrapper.inactive .thumb-item img {
     filter: none;
@@ -435,8 +446,8 @@ a {
 /* 浮动信息面板（覆盖在画布上） */
 .info-panel {
     position: absolute;
-    right: 16px;
-    top: 16px;
+    right: 12px;
+    top: 12px;
     background: linear-gradient(180deg, rgba(18, 22, 26, 0.9), rgba(12, 14, 18, 0.85));
     border: 1px solid rgba(255, 255, 255, 0.04);
     padding: 10px;
@@ -447,11 +458,11 @@ a {
     z-index: 40;
 }
 .info-panel.top {
-    top: 16px;
+    top: 12px;
     bottom: auto;
 }
 .info-panel.bottom {
-    bottom: 16px;
+    bottom: 12px;
     top: auto;
 }
 .workspace-topbar {
@@ -580,6 +591,20 @@ a {
     box-shadow: 0 6px 14px rgba(0, 180, 255, 0.06);
     border-color: rgba(0, 180, 255, 0.14);
 }
+.color-item:hover .color-hex {
+    color: #ffffff;
+}
+.color-item.highlighted {
+    background: #007fbf; /* 深蓝背景，提高对比 */
+    color: #ffffff;
+    box-shadow: 0 10px 26px rgba(0, 127, 191, 0.18);
+    border-color: rgba(255, 255, 255, 0.04);
+}
+.color-item.highlighted .color-hex,
+.color-item.highlighted .color-count {
+    color: #ffffff;
+    font-weight: 600;
+}
 .color-item:active {
     transform: translateY(0);
 }
@@ -589,6 +614,38 @@ a {
     border: 1px solid rgba(0, 0, 0, 0.12);
     box-sizing: border-box;
     border-radius: 3px;
+}
+
+.color-item.highlighted .color-swatch {
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* pixel hover info box */
+.pixel-hover-info {
+    position: fixed; /* 由 JS 设置 left/top */
+    pointer-events: none;
+    z-index: 100;
+    background: rgba(24, 26, 30, 0.98);
+    color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 127, 191, 0.12);
+    padding: 8px 12px;
+    font-size: 13px;
+    border: 1px solid rgba(0, 127, 191, 0.18);
+    min-width: 88px;
+    max-width: 260px;
+}
+.pixel-hover-info .swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    display: inline-block;
+}
+.pixel-hover-info .meta {
+    margin-top: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
 }
 .color-hex {
     font-size: 12px;
