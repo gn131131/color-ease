@@ -42,6 +42,14 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const overlayRef = useRef<HTMLCanvasElement | null>(null);
     const offscreenRef = useRef<HTMLCanvasElement | null>(null);
+    // cached ImageData for the active image to avoid repeated drawImage/getImageData
+    const imageDataRef = useRef<ImageData | null>(null);
+    // rAF-based sampler for pointer move throttling
+    const rafSampleRef = useRef<number | null>(null);
+    const lastSamplePosRef = useRef<{ x: number; y: number } | null>(null);
+    const selectionSamplePendingRef = useRef(false);
+    const offscreenInitializedRef = useRef(false);
+    const overlayRafRef = useRef<number | null>(null);
     const viewState = useRef({ x: 0, y: 0, dragging: false, lastX: 0, lastY: 0 });
     const isInteractingRef = useRef(false);
     const interactionTimerRef = useRef<number | null>(null);
@@ -224,7 +232,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         setTimeout(() => {
             try {
                 draw();
-                requestAnimationFrame(() => drawOverlay());
+                scheduleOverlayDraw();
             } catch (err) {}
         }, 0);
     }, [activeImage, computeMinScale]);
@@ -504,6 +512,28 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         };
     }, [resize]);
 
+    // Cache ImageData for active image to avoid repeated drawImage/getImageData calls
+    useEffect(() => {
+        imageDataRef.current = null;
+        offscreenInitializedRef.current = false;
+        if (!activeImage) return;
+        const off = offscreenRef.current!;
+        off.width = activeImage.width;
+        off.height = activeImage.height;
+        const octx = off.getContext("2d", { willReadFrequently: true })!;
+        octx.clearRect(0, 0, off.width, off.height);
+        octx.drawImage(activeImage.img, 0, 0);
+        try {
+            imageDataRef.current = octx.getImageData(0, 0, off.width, off.height);
+            offscreenInitializedRef.current = true;
+        } catch (err) {
+            // canvas may be tainted (cross-origin); fall back to per-call reads
+            console.warn("Unable to cache ImageData for active image", err);
+            imageDataRef.current = null;
+            offscreenInitializedRef.current = false;
+        }
+    }, [activeImage]);
+
     // keep ref in sync to avoid stale closure in fast wheel events
     useEffect(() => {
         scaleRef.current = scale;
@@ -519,6 +549,16 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             drawOverlay();
         } catch (err) {}
     }, [drawOverlay, selectionHoverHex, selection.colors, activeImage]);
+
+    const scheduleOverlayDraw = () => {
+        if (overlayRafRef.current != null) return;
+        overlayRafRef.current = requestAnimationFrame(() => {
+            overlayRafRef.current = null;
+            try {
+                drawOverlay();
+            } catch (err) {}
+        });
+    };
 
     // 动态计算选区颜色列表的最大高度，确保不超过预览面板可见高度（减去 info-panel 的上下间距）
     useEffect(() => {
@@ -901,16 +941,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                     }
                     // 如果当前没有正在框选且也没有固定选区，显示悬浮信息框
                     if (!(selectionRef.current && selectionRef.current.start)) {
-                        // hover 信息框：采样颜色
-                        const hex = sampleHexAt(hx, hy);
-                        let rgb = "";
-                        if (hex && hex.length === 7) {
-                            const r = parseInt(hex.slice(1, 3), 16);
-                            const g = parseInt(hex.slice(3, 5), 16);
-                            const b = parseInt(hex.slice(5, 7), 16);
-                            rgb = `rgb(${r}, ${g}, ${b})`;
-                        }
-                        // 将 hover 坐标限制在可见区域：相对于窗口或 container
+                        // don't synchronously sample here; rely on rAF-scheduled sampler for color
                         const containerBox = containerRef.current?.getBoundingClientRect();
                         const vw = window.innerWidth;
                         const vh = window.innerHeight;
@@ -925,13 +956,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         if (hxClient + boxW > maxX) hxClient = Math.max(minX, e.clientX - boxW - 16);
                         if (hyClient + boxH > maxY) hyClient = Math.max(minY, e.clientY - boxH - 16);
 
-                        setHoverInfo({
-                            visible: true,
-                            x: hxClient,
-                            y: hyClient,
-                            hex: hex || "",
-                            rgb
-                        });
+                        setHoverInfo((prev) => ({ visible: true, x: hxClient, y: hyClient, hex: prev?.hex || "", rgb: prev?.rgb || "" }));
                     } else {
                         setHoverInfo(null);
                     }
@@ -943,23 +968,25 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         const ex = Math.max(sel.start.x, sel.end.x);
                         const ey = Math.max(sel.start.y, sel.end.y);
                         if (hx >= sx && hx <= ex && hy >= sy && hy <= ey) {
-                            const sample = sampleHexAt(hx, hy);
-                            const sampleU = sample ? sample.toUpperCase() : null;
-                            setSelectionHoverHex(sampleU);
-                            try {
-                                requestAnimationFrame(() => drawOverlay());
-                            } catch (err) {}
+                            // use cached ImageData if present for sync response; otherwise defer to rAF-sampler
+                            if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
+                                const full = imageDataRef.current;
+                                const idx = (hy * full.width + hx) * 4;
+                                const a = full.data[idx + 3];
+                                const sampleU = a === 0 ? null : ("#" + [full.data[idx], full.data[idx + 1], full.data[idx + 2]].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
+                                setSelectionHoverHex(sampleU);
+                                scheduleOverlayDraw();
+                            } else {
+                                // mark pending and let raf sampler pick it up
+                                selectionSamplePendingRef.current = true;
+                            }
                         } else {
                             setSelectionHoverHex(null);
-                            try {
-                                requestAnimationFrame(() => drawOverlay());
-                            } catch (err) {}
+                            scheduleOverlayDraw();
                         }
                     } else {
                         setSelectionHoverHex(null);
-                        try {
-                            requestAnimationFrame(() => drawOverlay());
-                        } catch (err) {}
+                        scheduleOverlayDraw();
                     }
                 } else {
                     if (hoverPixelRef.current) {
@@ -1139,14 +1166,33 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
 
     const pickColorAt = (ix: number, iy: number) => {
         if (!activeImage) return;
-        // 利用隐藏canvas
-        const off = offscreenRef.current!;
-        off.width = activeImage.width;
-        off.height = activeImage.height;
-        const octx = off.getContext("2d", { willReadFrequently: true })!;
-        octx.drawImage(activeImage.img, 0, 0);
-        const data = octx.getImageData(Math.floor(ix), Math.floor(iy), 1, 1).data;
-        const hex = "#" + [data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
+        const x = Math.floor(ix);
+        const y = Math.floor(iy);
+        let r = 0,
+            g = 0,
+            b = 0,
+            a = 0;
+        if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
+            const full = imageDataRef.current;
+            const idx = (y * full.width + x) * 4;
+            r = full.data[idx];
+            g = full.data[idx + 1];
+            b = full.data[idx + 2];
+            a = full.data[idx + 3];
+        } else {
+            // fall back to drawing and sampling
+            const off = offscreenRef.current!;
+            off.width = activeImage.width;
+            off.height = activeImage.height;
+            const octx = off.getContext("2d", { willReadFrequently: true })!;
+            octx.drawImage(activeImage.img, 0, 0);
+            const data = octx.getImageData(x, y, 1, 1).data;
+            r = data[0];
+            g = data[1];
+            b = data[2];
+            a = data[3];
+        }
+        const hex = "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
         const hexU = hex.toUpperCase();
         setColor(hexU);
         return hexU;
@@ -1155,15 +1201,33 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     // 仅采样颜色，不改变全局 color
     const sampleHexAt = (ix: number, iy: number) => {
         if (!activeImage) return null;
-        const off = offscreenRef.current!;
-        off.width = activeImage.width;
-        off.height = activeImage.height;
-        const octx = off.getContext("2d", { willReadFrequently: true })!;
-        octx.drawImage(activeImage.img, 0, 0);
-        const data = octx.getImageData(Math.floor(ix), Math.floor(iy), 1, 1).data;
-        const a = data[3];
+        const x = Math.floor(ix);
+        const y = Math.floor(iy);
+        let r = 0,
+            g = 0,
+            b = 0,
+            a = 0;
+        if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
+            const full = imageDataRef.current;
+            const idx = (y * full.width + x) * 4;
+            r = full.data[idx];
+            g = full.data[idx + 1];
+            b = full.data[idx + 2];
+            a = full.data[idx + 3];
+        } else {
+            const off = offscreenRef.current!;
+            off.width = activeImage.width;
+            off.height = activeImage.height;
+            const octx = off.getContext("2d", { willReadFrequently: true })!;
+            octx.drawImage(activeImage.img, 0, 0);
+            const data = octx.getImageData(x, y, 1, 1).data;
+            r = data[0];
+            g = data[1];
+            b = data[2];
+            a = data[3];
+        }
         if (a === 0) return null;
-        const hex = "#" + [data[0], data[1], data[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
+        const hex = "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
         return hex.toUpperCase();
     };
 
@@ -1177,26 +1241,43 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         const w = ex - sx + 1;
         const h = ey - sy + 1;
         if (w <= 0 || h <= 0) return [];
-        const off = offscreenRef.current!;
-        off.width = activeImage.width;
-        off.height = activeImage.height;
-        const octx = off.getContext("2d", { willReadFrequently: true })!;
-        octx.drawImage(activeImage.img, 0, 0);
-        const imgData = octx.getImageData(sx, sy, w, h).data;
         const map = new Map<string, number>();
-        for (let i = 0; i < imgData.length; i += 4) {
-            const a = imgData[i + 3];
-            if (a === 0) continue; // skip fully transparent
-            const r = imgData[i];
-            const g = imgData[i + 1];
-            const b = imgData[i + 2];
-            const hex =
-                "#" +
-                [r, g, b]
-                    .map((v) => v.toString(16).padStart(2, "0"))
-                    .join("")
-                    .toUpperCase();
-            map.set(hex, (map.get(hex) || 0) + 1);
+        if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
+            const full = imageDataRef.current;
+            for (let yy = 0; yy < h; yy++) {
+                const rowStart = ((sy + yy) * full.width + sx) * 4;
+                for (let xx = 0; xx < w; xx++) {
+                    const idx = rowStart + xx * 4;
+                    const a = full.data[idx + 3];
+                    if (a === 0) continue;
+                    const r = full.data[idx];
+                    const g = full.data[idx + 1];
+                    const b = full.data[idx + 2];
+                    const hex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
+                    map.set(hex, (map.get(hex) || 0) + 1);
+                }
+            }
+        } else {
+            const off = offscreenRef.current!;
+            off.width = activeImage.width;
+            off.height = activeImage.height;
+            const octx = off.getContext("2d", { willReadFrequently: true })!;
+            octx.drawImage(activeImage.img, 0, 0);
+            const imgData = octx.getImageData(sx, sy, w, h).data;
+            for (let i = 0; i < imgData.length; i += 4) {
+                const a = imgData[i + 3];
+                if (a === 0) continue; // skip fully transparent
+                const r = imgData[i];
+                const g = imgData[i + 1];
+                const b = imgData[i + 2];
+                const hex =
+                    "#" +
+                    [r, g, b]
+                        .map((v) => v.toString(16).padStart(2, "0"))
+                        .join("")
+                        .toUpperCase();
+                map.set(hex, (map.get(hex) || 0) + 1);
+            }
         }
         const arr = Array.from(map.entries()).map(([hex, count]) => ({ hex, count }));
         arr.sort((a, b) => b.count - a.count);
@@ -1216,24 +1297,42 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             selectionColorIndexRef.current = null;
             return;
         }
-        const off = offscreenRef.current!;
-        off.width = activeImage.width;
-        off.height = activeImage.height;
-        const octx = off.getContext("2d")!;
-        octx.drawImage(activeImage.img, 0, 0);
-        const imgData = octx.getImageData(sx, sy, w, h).data;
         const map = new Map<string, Array<{ x: number; y: number }>>();
-        for (let yy = 0; yy < h; yy++) {
-            for (let xx = 0; xx < w; xx++) {
-                const idx = (yy * w + xx) * 4;
-                const a = imgData[idx + 3];
-                if (a === 0) continue;
-                const r = imgData[idx];
-                const g = imgData[idx + 1];
-                const b = imgData[idx + 2];
-                const hex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
-                if (!map.has(hex)) map.set(hex, []);
-                map.get(hex)!.push({ x: sx + xx, y: sy + yy });
+        if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
+            const full = imageDataRef.current;
+            for (let yy = 0; yy < h; yy++) {
+                const rowStart = ((sy + yy) * full.width + sx) * 4;
+                for (let xx = 0; xx < w; xx++) {
+                    const idx = rowStart + xx * 4;
+                    const a = full.data[idx + 3];
+                    if (a === 0) continue;
+                    const r = full.data[idx];
+                    const g = full.data[idx + 1];
+                    const b = full.data[idx + 2];
+                    const hex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
+                    if (!map.has(hex)) map.set(hex, []);
+                    map.get(hex)!.push({ x: sx + xx, y: sy + yy });
+                }
+            }
+        } else {
+            const off = offscreenRef.current!;
+            off.width = activeImage.width;
+            off.height = activeImage.height;
+            const octx = off.getContext("2d")!;
+            octx.drawImage(activeImage.img, 0, 0);
+            const imgData = octx.getImageData(sx, sy, w, h).data;
+            for (let yy = 0; yy < h; yy++) {
+                for (let xx = 0; xx < w; xx++) {
+                    const idx = (yy * w + xx) * 4;
+                    const a = imgData[idx + 3];
+                    if (a === 0) continue;
+                    const r = imgData[idx];
+                    const g = imgData[idx + 1];
+                    const b = imgData[idx + 2];
+                    const hex = ("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")).toUpperCase();
+                    if (!map.has(hex)) map.set(hex, []);
+                    map.get(hex)!.push({ x: sx + xx, y: sy + yy });
+                }
             }
         }
         selectionColorIndexRef.current = map;
@@ -1306,10 +1405,32 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                     }
                     onPointerDown={handlePointerDown}
                     onPointerMove={(e) => {
-                        // when in picker mode, pick on move
+                        // throttle sampling via rAF: record last position and schedule a sample
                         if (tool === "picker") {
                             const pos = toImageCoord(e.clientX, e.clientY);
-                            if (pos) pickColorAt(pos.x, pos.y);
+                            if (pos) {
+                                lastSamplePosRef.current = { x: Math.floor(pos.x), y: Math.floor(pos.y) };
+                                if (rafSampleRef.current == null) {
+                                    rafSampleRef.current = requestAnimationFrame(() => {
+                                        rafSampleRef.current = null;
+                                        const p = lastSamplePosRef.current;
+                                        if (!p) return;
+                                        // fast sample to update hover / color without redrawing whole canvas
+                                        try {
+                                            const hex = sampleHexAt(p.x, p.y);
+                                            if (hex) {
+                                                setHoverInfo((hi) => (hi ? { ...hi, hex } : hi));
+                                            }
+                                            if (selectionSamplePendingRef.current) {
+                                                const sampleU = hex ? hex.toUpperCase() : null;
+                                                setSelectionHoverHex(sampleU);
+                                                selectionSamplePendingRef.current = false;
+                                                scheduleOverlayDraw();
+                                            }
+                                        } catch (err) {}
+                                    });
+                                }
+                            }
                         }
                         handlePointerMove(e);
                     }}
@@ -1322,7 +1443,7 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                         setHoverInfo(null);
                         setSelectionHoverHex(null);
                         try {
-                            requestAnimationFrame(() => drawOverlay());
+                            scheduleOverlayDraw();
                         } catch (err) {}
                     }}
                     onContextMenu={handleContextMenu}
@@ -1382,15 +1503,11 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
                                                     className={`color-item ${isHighlighted ? "highlighted" : ""}`}
                                                     onMouseEnter={() => {
                                                         setSelectionHoverHex(c.hex.toUpperCase());
-                                                        try {
-                                                            requestAnimationFrame(() => drawOverlay());
-                                                        } catch (err) {}
+                                                        scheduleOverlayDraw();
                                                     }}
                                                     onMouseLeave={() => {
                                                         setSelectionHoverHex(null);
-                                                        try {
-                                                            requestAnimationFrame(() => drawOverlay());
-                                                        } catch (err) {}
+                                                        scheduleOverlayDraw();
                                                     }}
                                                     onClick={() => {
                                                         try {
