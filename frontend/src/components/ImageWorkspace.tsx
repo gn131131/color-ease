@@ -50,6 +50,10 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     const selectionSamplePendingRef = useRef(false);
     const offscreenInitializedRef = useRef(false);
     const overlayRafRef = useRef<number | null>(null);
+    // worker for heavy selection computations
+    const selectionWorkerRef = useRef<Worker | null>(null);
+    const workerRequestIdRef = useRef(1);
+    const workerPendingRef = useRef(new Map<number, { type: string; resolve: Function; reject: Function }>());
     const viewState = useRef({ x: 0, y: 0, dragging: false, lastX: 0, lastY: 0 });
     const isInteractingRef = useRef(false);
     const interactionTimerRef = useRef<number | null>(null);
@@ -524,8 +528,45 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         octx.clearRect(0, 0, off.width, off.height);
         octx.drawImage(activeImage.img, 0, 0);
         try {
-            imageDataRef.current = octx.getImageData(0, 0, off.width, off.height);
+            const imgData = octx.getImageData(0, 0, off.width, off.height);
+            imageDataRef.current = imgData;
             offscreenInitializedRef.current = true;
+            // initialize worker and transfer buffer for heavy computations
+            try {
+                if (!selectionWorkerRef.current) {
+                    // create worker from relative path
+                    // @ts-ignore
+                    selectionWorkerRef.current = new Worker(new URL("../workers/selectionWorker.ts", import.meta.url), { type: "module" });
+                    selectionWorkerRef.current.onmessage = (ev) => {
+                        const m = ev.data;
+                        if (!m || !m.type) return;
+                        const pending = workerPendingRef.current.get(m.requestId);
+                        if (m.type === "statsResult") {
+                            if (pending) {
+                                pending.resolve(m.colors || []);
+                                workerPendingRef.current.delete(m.requestId);
+                            }
+                        } else if (m.type === "indexResult") {
+                            if (pending) {
+                                pending.resolve(m.index || {});
+                                workerPendingRef.current.delete(m.requestId);
+                            }
+                        } else if (m.type === "error") {
+                            if (pending) {
+                                pending.reject(new Error(m.message || "worker error"));
+                                workerPendingRef.current.delete(m.requestId);
+                            }
+                        }
+                    };
+                }
+                // send init with transferable buffer
+                if (selectionWorkerRef.current && imageDataRef.current) {
+                    const buf = imageDataRef.current.data.buffer.slice(0);
+                    selectionWorkerRef.current.postMessage({ type: "init", width: imageDataRef.current.width, height: imageDataRef.current.height, data: buf }, [buf]);
+                }
+            } catch (err) {
+                console.warn("Failed to init selection worker:", err);
+            }
         } catch (err) {
             // canvas may be tainted (cross-origin); fall back to per-call reads
             console.warn("Unable to cache ImageData for active image", err);
@@ -1123,15 +1164,26 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             // ensure selection.end exists
             const end = selectionRef.current.end || selectionRef.current.start;
             updateSelection((s) => ({ ...s, end }));
-            // 统计颜色并更新信息面板
+            // 统计颜色并更新信息面板（使用 worker 异步计算，避免阻塞主线程）
             setTimeout(() => {
-                if (activeImage && selectionRef.current.start) {
-                    const stats = pickColorsInSelection(selectionRef.current.start!, end!);
-                    updateSelection((s) => ({ ...s, colors: stats }));
-                    // 构建颜色到坐标索引以便后续高亮使用
-                    buildColorIndexInSelection(selectionRef.current.start!, end!);
-                    draw();
-                }
+                (async () => {
+                    if (activeImage && selectionRef.current.start) {
+                        try {
+                            const stats = await pickColorsInSelection(selectionRef.current.start!, end!);
+                            updateSelection((s) => ({ ...s, colors: stats }));
+                        } catch (err) {
+                            console.warn("Selection stats failed:", err);
+                            updateSelection((s) => ({ ...s, colors: [] }));
+                        }
+                        try {
+                            await buildColorIndexInSelection(selectionRef.current.start!, end!);
+                        } catch (err) {
+                            console.warn("Build index failed:", err);
+                            selectionColorIndexRef.current = null;
+                        }
+                        draw();
+                    }
+                })();
             }, 0);
         }
         // 隐藏测量浮动提示（测量结束或取消）
@@ -1231,8 +1283,8 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         return hex.toUpperCase();
     };
 
-    // 统计选区内不重复颜色（排除 alpha === 0），返回按 count 降序的数组
-    const pickColorsInSelection = (start: { x: number; y: number }, end: { x: number; y: number }) => {
+    // 使用 worker 统计选区颜色（若 worker 无效则回退到主线程实现）
+    const pickColorsInSelection = async (start: { x: number; y: number }, end: { x: number; y: number }) => {
         if (!activeImage) return [] as Array<{ hex: string; count: number }>;
         const sx = Math.max(0, Math.min(start.x, end.x));
         const sy = Math.max(0, Math.min(start.y, end.y));
@@ -1241,6 +1293,20 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
         const w = ex - sx + 1;
         const h = ey - sy + 1;
         if (w <= 0 || h <= 0) return [];
+        // try worker
+        if (selectionWorkerRef.current && imageDataRef.current) {
+            const id = workerRequestIdRef.current++;
+            return new Promise<Array<{ hex: string; count: number }>>((resolve, reject) => {
+                workerPendingRef.current.set(id, { type: "stats", resolve, reject });
+                try {
+                    selectionWorkerRef.current!.postMessage({ type: "stats", sx, sy, w, h, requestId: id });
+                } catch (err) {
+                    workerPendingRef.current.delete(id);
+                    reject(err);
+                }
+            });
+        }
+        // fallback to main-thread implementation
         const map = new Map<string, number>();
         if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
             const full = imageDataRef.current;
@@ -1285,8 +1351,12 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
     };
 
     // 构建选区内颜色到坐标列表的索引，用于快速高亮（在选区固定后构建一次）
-    const buildColorIndexInSelection = (start: { x: number; y: number }, end: { x: number; y: number }) => {
-        if (!activeImage) return;
+    // 使用 worker 构建颜色索引（键->坐标数组）。若 worker 不可用，则回退到主线程实现
+    const buildColorIndexInSelection = async (start: { x: number; y: number }, end: { x: number; y: number }) => {
+        if (!activeImage) {
+            selectionColorIndexRef.current = null;
+            return;
+        }
         const sx = Math.max(0, Math.min(start.x, end.x));
         const sy = Math.max(0, Math.min(start.y, end.y));
         const ex = Math.min(activeImage.width - 1, Math.max(start.x, end.x));
@@ -1297,6 +1367,34 @@ export const ImageWorkspace: React.FC<{ tool: Tool; setTool: (t: Tool) => void; 
             selectionColorIndexRef.current = null;
             return;
         }
+        if (selectionWorkerRef.current && imageDataRef.current) {
+            const id = workerRequestIdRef.current++;
+            return new Promise<void>((resolve, reject) => {
+                workerPendingRef.current.set(id, {
+                    type: "buildIndex",
+                    resolve: (indexObj: any) => {
+                        // worker returns index as { hex: [x,y,x,y...] }
+                        const map = new Map<string, Array<{ x: number; y: number }>>();
+                        for (const hex in indexObj) {
+                            const arr = indexObj[hex] as number[];
+                            const coords: Array<{ x: number; y: number }> = [];
+                            for (let i = 0; i < arr.length; i += 2) coords.push({ x: arr[i], y: arr[i + 1] });
+                            map.set(hex, coords);
+                        }
+                        selectionColorIndexRef.current = map;
+                        resolve();
+                    },
+                    reject
+                });
+                try {
+                    selectionWorkerRef.current!.postMessage({ type: "buildIndex", sx, sy, w, h, requestId: id });
+                } catch (err) {
+                    workerPendingRef.current.delete(id);
+                    reject(err);
+                }
+            });
+        }
+        // fallback synchronous build
         const map = new Map<string, Array<{ x: number; y: number }>>();
         if (imageDataRef.current && activeImage && imageDataRef.current.width === activeImage.width && imageDataRef.current.height === activeImage.height) {
             const full = imageDataRef.current;
