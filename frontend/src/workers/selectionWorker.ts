@@ -61,7 +61,9 @@ self.onmessage = (ev) => {
                 postMessage({ type: "indexResult", requestId, index: {} });
                 return;
             }
-            const indexObj: { [hex: string]: number[] } = {};
+            // 优化：每种颜色的坐标用Uint32Array打包
+            const indexObj: { [hex: string]: Uint32Array } = {};
+            const temp: { [hex: string]: number[] } = {};
             for (let yy = 0; yy < h; yy++) {
                 const rowStart = ((sy + yy) * width + sx) * 4;
                 for (let xx = 0; xx < w; xx++) {
@@ -72,11 +74,16 @@ self.onmessage = (ev) => {
                     const g = data[idx + 1];
                     const b = data[idx + 2];
                     const hex = toHex(r, g, b);
-                    if (!indexObj[hex]) indexObj[hex] = [];
-                    indexObj[hex].push(sx + xx, sy + yy);
+                    if (!temp[hex]) temp[hex] = [];
+                    temp[hex].push(sx + xx, sy + yy);
                 }
             }
-            postMessage({ type: "indexResult", requestId, index: indexObj });
+            for (const hex in temp) {
+                indexObj[hex] = new Uint32Array(temp[hex]);
+            }
+            // 传递 TypedArray，主线程解析更快
+            const transfers = Object.values(indexObj).map((arr) => arr.buffer);
+            (self as any).postMessage({ type: "indexResult", requestId, index: indexObj }, transfers);
             return;
         }
     } catch (err) {
