@@ -14,7 +14,7 @@ jobs:
             contents: read
             packages: write
         env:
-            REGISTRY: docker.pumpking.life
+            REGISTRY: docker.pumpking.work
             IMAGE_NAME_BACKEND: color-ease-backend
             IMAGE_NAME_FRONTEND: color-ease-frontend
             DEFAULT_TAG: latest

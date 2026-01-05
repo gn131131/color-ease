@@ -39,7 +39,7 @@ Vite 已通过 `server.proxy` 把 /api 与 /health 代理到 3001。
 ## Docker 部署 (使用已构建镜像)
 拉取并运行（默认 latest，可用 TAG 指定）:
 ```
-docker login docker.pumpking.life
+docker login docker.pumpking.work
 docker compose pull
 TAG=latest docker compose up -d
 ```
@@ -56,8 +56,8 @@ FRONTEND_PORT=30080 docker compose up -d
 
 ## GitHub Action 镜像
 推送到 main 触发构建：
-- 后端: docker.pumpking.life/color-ease-backend:latest (及其他 tag)
-- 前端: docker.pumpking.life/color-ease-frontend:latest
+- 后端: docker.pumpking.work/color-ease-backend:latest (及其他 tag)
+- 前端: docker.pumpking.work/color-ease-frontend:latest
 
 ## TODO / 可扩展
 - 图片取色、屏幕取色 (EyeDropper API)

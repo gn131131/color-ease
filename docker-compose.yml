@@ -1,7 +1,7 @@
 version: "3.9"
 services:
     backend:
-        image: docker.pumpking.life/color-ease-backend:${TAG:-latest}
+        image: docker.pumpking.work/color-ease-backend:${TAG:-latest}
         container_name: color-ease-backend
         environment:
             PORT: 3001 # internal container port stays 3001
@@ -17,7 +17,7 @@ services:
             retries: 3
             start_period: 10s
     frontend:
-        image: docker.pumpking.life/color-ease-frontend:${TAG:-latest}
+        image: docker.pumpking.work/color-ease-frontend:${TAG:-latest}
         container_name: color-ease-frontend
         depends_on:
             - backend
@@ -26,7 +26,7 @@ services:
             - "${FRONTEND_PORT:-38081}:80"
         restart: unless-stopped
 # 使用方法:
-# 1) 登录私有仓库: docker login docker.pumpking.life
+# 1) 登录私有仓库: docker login docker.pumpking.work
 # 2) 拉取镜像(可选): docker compose pull
 # 3) 启动: TAG=latest docker compose up -d
 # 4) 访问: http://<服务器IP>:38081  (或你自定义的 FRONTEND_PORT)
